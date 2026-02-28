@@ -6,7 +6,59 @@ import base64
 
 from tracker.github_client import GitHubClient
 from tracker.sheets_client import SheetsClient
-from tracker.fork_discovery import discover_learners
+
+
+def _parse_username_from_url(url):
+    """Extract GitHub username from a URL or plain username."""
+    return url.strip().rstrip("/").split("/")[-1]
+
+
+def _load_learners_from_metrics(sheets, gh, base_repos):
+    """Read GitHub accounts from the Metrics tab and resolve their forks."""
+    try:
+        ws = sheets.spreadsheet.worksheet("Metrics")
+    except Exception:
+        return []
+
+    rows = ws.get_all_values()
+    # Column B (index 1) has GitHub accounts, starting from row 3 (row 1 is title, row 2 is headers)
+    usernames = []
+    for row in rows[2:]:
+        if len(row) >= 2 and row[1].strip():
+            usernames.append(_parse_username_from_url(row[1]))
+
+    if not usernames:
+        return []
+
+    # Build fork map for each base repo
+    fork_map = {}
+    for repo_full in base_repos:
+        owner, repo = repo_full.split("/")
+        forks = gh.get_forks(owner, repo)
+        for f in forks:
+            fork_map[f["owner"]["login"].lower()] = {
+                "full_name": f["full_name"],
+                "base_repo": repo_full,
+            }
+
+    learners = []
+    for username in usernames:
+        fork_info = fork_map.get(username.lower())
+        if fork_info:
+            learners.append({
+                "username": username,
+                "fork_repo": fork_info["full_name"],
+                "base_repo": fork_info["base_repo"],
+            })
+        else:
+            # No fork found — still track PRs/issues on base repo
+            learners.append({
+                "username": username,
+                "fork_repo": f"{username}/llm_engineering",
+                "base_repo": base_repos[0],
+            })
+
+    return learners
 
 
 def load_env():
@@ -21,21 +73,8 @@ def load_env():
 
     config = sheets.read_config()
     base_repos = [r.strip() for r in config.get("base_repos", "ed-donner/llm_engineering").split(",")]
-    excluded = [u.strip() for u in config.get("excluded_users", "").split(",") if u.strip()]
-    bootcamp_start = config.get("bootcamp_start_date", "")
 
-    manual_users = []
-    manual_raw = config.get("manual_users", "")
-    if manual_raw:
-        for entry in manual_raw.split(";"):
-            parts = entry.strip().split(",")
-            if len(parts) == 3:
-                manual_users.append({
-                    "username": parts[0].strip(),
-                    "fork_repo": parts[1].strip(),
-                    "base_repo": parts[2].strip(),
-                })
-
-    learners = discover_learners(gh, base_repos, excluded, manual_users, bootcamp_start)
+    # Load learners from the Metrics tab
+    learners = _load_learners_from_metrics(sheets, gh, base_repos)
 
     return gh, sheets, config, base_repos, learners
