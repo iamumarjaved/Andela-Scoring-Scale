@@ -18,7 +18,7 @@ DAILY_HEADERS = [
 ]
 
 
-def fetch_base_repo_data(gh, base_repos, since=None):
+def fetch_base_repo_data(gh, base_repos, since=None, include_review_comments=False):
     """Fetch PRs, issues, comments from base repos once."""
     base_repo_data = {}
     for repo_full in base_repos:
@@ -36,7 +36,21 @@ def fetch_base_repo_data(gh, base_repos, since=None):
             comments = gh.get_issue_comments(base_owner, base_repo, since=since)
         except Exception:
             comments = []
-        base_repo_data[repo_full] = {"prs": prs, "issues": issues, "comments": comments}
+
+        # Bulk fetch all PR review comments (avoids per-PR API calls)
+        review_comments = []
+        if include_review_comments:
+            print(f"  Fetching all PR review comments for {repo_full}...")
+            try:
+                review_comments = gh.get_all_pr_review_comments(base_owner, base_repo)
+            except Exception:
+                review_comments = []
+            print(f"    Got {len(review_comments)} review comments")
+
+        base_repo_data[repo_full] = {
+            "prs": prs, "issues": issues,
+            "comments": comments, "review_comments": review_comments,
+        }
     return base_repo_data
 
 
@@ -141,7 +155,6 @@ def fetch_learner_alltime(gh, learner, base_repo_data):
     active_dates = set()
     for c in all_commits:
         active_dates.add(c["commit"]["author"]["date"][:10])
-    active_days = len(active_dates)
 
     # Weekly commits (last 7 days)
     week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT00:00:00Z")
@@ -151,23 +164,31 @@ def fetch_learner_alltime(gh, learner, base_repo_data):
         weekly_commits = []
     weekly_commit_count = len(weekly_commits)
 
-    # Per-commit line stats (sample last 50 commits to avoid rate limits)
-    total_added = 0
-    total_deleted = 0
-    for commit in all_commits[:50]:
-        try:
-            stats = gh.get_commit_stats(fork_owner, fork_repo, commit["sha"])
-            total_added += stats["additions"]
-            total_deleted += stats["deletions"]
-        except Exception:
-            pass
-
     # All-time PR data from base repo
-    data = base_repo_data.get(learner["base_repo"], {"prs": [], "issues": [], "comments": []})
+    data = base_repo_data.get(learner["base_repo"], {
+        "prs": [], "issues": [], "comments": [], "review_comments": [],
+    })
     user_prs = [p for p in data["prs"] if p["user"]["login"].lower() == username.lower()]
 
     prs_opened = len(user_prs)
     prs_merged = len([p for p in user_prs if p.get("merged_at")])
+
+    # Lines added/deleted — from PR details (not fork commits)
+    # PRs have additions/deletions when fetched individually
+    total_added = 0
+    total_deleted = 0
+    for pr in user_prs:
+        try:
+            pr_detail = gh.get_pr_detail(base_owner, base_repo, pr["number"])
+            total_added += pr_detail.get("additions", 0)
+            total_deleted += pr_detail.get("deletions", 0)
+        except Exception:
+            pass
+
+    # Also count active days from PR creation dates
+    for pr in user_prs:
+        active_dates.add(pr["created_at"][:10])
+    active_days = len(active_dates)
 
     # Average merge time across all merged PRs
     merge_times = []
@@ -183,26 +204,25 @@ def fetch_learner_alltime(gh, learner, base_repo_data):
     rejected = [p for p in closed_prs if not p.get("merged_at")]
     rejection_rate = round(len(rejected) / len(closed_prs), 2) if closed_prs else 0
 
-    # PR review comments received (on this user's PRs)
-    review_comments_received = 0
-    for pr in user_prs[:20]:
-        try:
-            rc = gh.get_pr_review_comments(base_owner, base_repo, pr["number"])
-            review_comments_received += len([c for c in rc if c["user"]["login"].lower() != username.lower()])
-        except Exception:
-            pass
+    # Use bulk review comments (fetched once for entire repo)
+    all_review_comments = data.get("review_comments", [])
+    user_pr_numbers = {pr["number"] for pr in user_prs}
 
-    # PR review comments given (on other people's PRs) — check recent PRs
-    review_comments_given = 0
-    other_prs = [p for p in data["prs"] if p["user"]["login"].lower() != username.lower()]
-    for pr in other_prs[:30]:
-        try:
-            rc = gh.get_pr_review_comments(base_owner, base_repo, pr["number"])
-            review_comments_given += len([c for c in rc if c["user"]["login"].lower() == username.lower()])
-        except Exception:
-            pass
+    # Comments received = comments by others on this user's PRs
+    review_comments_received = len([
+        c for c in all_review_comments
+        if c.get("pull_request_url", "").split("/")[-1].isdigit()
+        and int(c["pull_request_url"].split("/")[-1]) in user_pr_numbers
+        and c["user"]["login"].lower() != username.lower()
+    ])
 
-    # Repo contributions (PRs + issues + comments)
+    # Comments given = comments by this user on any PR
+    review_comments_given = len([
+        c for c in all_review_comments
+        if c["user"]["login"].lower() == username.lower()
+    ])
+
+    # Repo contributions (PRs + issues + issue comments)
     user_issues = [i for i in data["issues"] if i["user"]["login"].lower() == username.lower()]
     user_comments = [c for c in data["comments"] if c["user"]["login"].lower() == username.lower()]
     repo_contributions = prs_opened + len(user_issues) + len(user_comments)
@@ -279,7 +299,7 @@ def update_metrics_tab(gh, sheets, learners, base_repos):
             username = row[1].strip().rstrip("/").split("/")[-1]
             username_rows[username.lower()] = i
 
-    base_repo_data = fetch_base_repo_data(gh, base_repos)
+    base_repo_data = fetch_base_repo_data(gh, base_repos, include_review_comments=True)
 
     updates = []
     for learner in learners:
