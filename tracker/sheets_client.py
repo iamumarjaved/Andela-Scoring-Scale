@@ -22,6 +22,33 @@ class SheetsClient:
         except gspread.WorksheetNotFound:
             return self.spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=30)
 
+    def rename_worksheet(self, old_name, new_name):
+        """Rename a worksheet. Returns the worksheet, or None if old_name not found."""
+        try:
+            ws = self.spreadsheet.worksheet(new_name)
+            return ws  # Already renamed
+        except gspread.WorksheetNotFound:
+            pass
+        try:
+            ws = self.spreadsheet.worksheet(old_name)
+            ws.update_title(new_name)
+            return ws
+        except gspread.WorksheetNotFound:
+            return None
+
+    def reorder_worksheets(self, tab_names):
+        """Reorder tabs to match the given list. Tabs not in the list stay at the end."""
+        existing = {ws.title: ws for ws in self.spreadsheet.worksheets()}
+        ordered = []
+        for name in tab_names:
+            if name in existing:
+                ordered.append(existing[name])
+        # Append any remaining tabs not in the desired order
+        for ws in self.spreadsheet.worksheets():
+            if ws not in ordered:
+                ordered.append(ws)
+        self.spreadsheet.reorder_worksheets(ordered)
+
     def load_rows(self, worksheet):
         """Load all rows into cache for fast lookups."""
         all_values = worksheet.get_all_values()
@@ -57,6 +84,16 @@ class SheetsClient:
         """Write headers + all data rows in one API call."""
         data = [headers] + rows
         worksheet.update(values=data, range_name=f"A1:{chr(64+len(headers))}{len(data)}")
+
+    def clear_and_write(self, worksheet, headers, rows):
+        """Clear the worksheet then write headers + rows. For full-tab rewrites."""
+        worksheet.clear()
+        if not rows:
+            worksheet.update(values=[headers], range_name=f"A1:{chr(64+len(headers))}1")
+            return
+        data = [headers] + rows
+        col_letter = chr(64 + len(headers)) if len(headers) <= 26 else "Z"
+        worksheet.update(values=data, range_name=f"A1:{col_letter}{len(data)}")
 
     def read_config(self):
         """Read Config tab key-value pairs into a dict."""
