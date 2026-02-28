@@ -88,6 +88,12 @@ class GitHubClient:
             prs = [pr for pr in prs if pr["user"]["login"].lower() == author.lower()]
         return prs
 
+    def get_pr_detail(self, owner, repo, pr_number):
+        """Single PR detail — includes additions, deletions, comments count."""
+        return self._request(
+            f"{self.BASE_URL}/repos/{owner}/{repo}/pulls/{pr_number}"
+        )
+
     def get_pr_reviews(self, owner, repo, pr_number):
         """Reviews on a PR."""
         return self._request(
@@ -98,6 +104,15 @@ class GitHubClient:
         """Review comments on a PR."""
         return self._request(
             f"{self.BASE_URL}/repos/{owner}/{repo}/pulls/{pr_number}/comments"
+        )
+
+    def get_all_pr_review_comments(self, owner, repo, since=None):
+        """All review comments across all PRs in a repo."""
+        params = {"per_page": 100, "sort": "created", "direction": "desc"}
+        if since:
+            params["since"] = since
+        return self._request(
+            f"{self.BASE_URL}/repos/{owner}/{repo}/pulls/comments", params
         )
 
     def get_issues(self, owner, repo, creator=None, state="all"):
