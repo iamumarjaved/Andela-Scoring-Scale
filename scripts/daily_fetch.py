@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Daily deep fetch — per-commit stats, PR merge times, rejection rates.
-Writes daily data to Daily Raw Metrics AND aggregated totals to Metrics tab."""
+Writes daily data to Daily Raw Metrics, Leaderboard, Daily View, and Alerts tabs."""
 
 import os
 import sys
@@ -15,6 +15,23 @@ DAILY_HEADERS = [
     "Issues Opened", "Issue Comments", "PR Review Comments Given",
     "Lines Added", "Lines Deleted", "PR Avg Merge Time (hrs)",
     "PR Rejection Rate", "Last Updated",
+]
+
+LEADERBOARD_HEADERS = [
+    "Rank", "Learner", "Classification", "Total Score", "Consistency",
+    "Collaboration", "Code Volume", "Quality", "Active Days",
+    "Total Commits", "PRs Opened", "PRs Merged", "Lines Added",
+    "Lines Deleted", "Comments Received", "Comments Given",
+    "Avg Merge Time", "Rejection Rate", "Last Active",
+]
+
+DAILY_VIEW_HEADERS = [
+    "Date", "Learner", "Commits", "PRs Opened", "PRs Merged",
+    "Lines Added", "Lines Deleted", "Comments", "Activity Score",
+]
+
+ALERTS_HEADERS = [
+    "Learner", "Alert Type", "Details", "Last Active", "Score",
 ]
 
 
@@ -33,7 +50,7 @@ def fetch_base_repo_data(gh, base_repos, since=None, include_review_comments=Fal
         except Exception:
             issues = []
         try:
-            comments = gh.get_issue_comments(base_owner, base_repo, since=since)
+            comments = gh.get_issue_comments(base_owner, base_repo, since=since if since else None)
         except Exception:
             comments = []
 
@@ -138,7 +155,7 @@ def fetch_learner_day(gh, learner, base_repo_data, date_str):
 
 
 def fetch_learner_alltime(gh, learner, base_repo_data):
-    """Fetch all-time aggregated metrics for one learner for the Metrics tab."""
+    """Fetch all-time aggregated metrics for one learner."""
     username = learner["username"]
     fork_owner, fork_repo = learner["fork_repo"].split("/")
     base_owner, base_repo = learner["base_repo"].split("/")
@@ -173,8 +190,7 @@ def fetch_learner_alltime(gh, learner, base_repo_data):
     prs_opened = len(user_prs)
     prs_merged = len([p for p in user_prs if p.get("merged_at")])
 
-    # Lines added/deleted — from PR details (not fork commits)
-    # PRs have additions/deletions when fetched individually
+    # Lines added/deleted — from PR details
     total_added = 0
     total_deleted = 0
     for pr in user_prs:
@@ -204,42 +220,130 @@ def fetch_learner_alltime(gh, learner, base_repo_data):
     rejected = [p for p in closed_prs if not p.get("merged_at")]
     rejection_rate = round(len(rejected) / len(closed_prs), 2) if closed_prs else 0
 
-    # Use bulk review comments (fetched once for entire repo)
+    # Comments received on this user's PRs (issue-style + inline review)
+    comments_received = 0
+    for pr in user_prs:
+        try:
+            pr_comments = gh._request(
+                f"{gh.BASE_URL}/repos/{base_owner}/{base_repo}/issues/{pr['number']}/comments"
+            )
+            comments_received += len([
+                c for c in pr_comments
+                if c["user"]["login"].lower() != username.lower()
+            ])
+        except Exception:
+            pass
+
     all_review_comments = data.get("review_comments", [])
     user_pr_numbers = {pr["number"] for pr in user_prs}
-
-    # Comments received = comments by others on this user's PRs
-    review_comments_received = len([
+    comments_received += len([
         c for c in all_review_comments
         if c.get("pull_request_url", "").split("/")[-1].isdigit()
         and int(c["pull_request_url"].split("/")[-1]) in user_pr_numbers
         and c["user"]["login"].lower() != username.lower()
     ])
 
-    # Comments given = comments by this user on any PR
-    review_comments_given = len([
+    # Comments given by this user on ANY PR
+    all_issue_comments = data.get("comments", [])
+    comments_given = len([
+        c for c in all_issue_comments
+        if c["user"]["login"].lower() == username.lower()
+    ])
+    comments_given += len([
         c for c in all_review_comments
         if c["user"]["login"].lower() == username.lower()
     ])
 
-    # Repo contributions (PRs + issues + issue comments)
+    # Issues opened
     user_issues = [i for i in data["issues"] if i["user"]["login"].lower() == username.lower()]
-    user_comments = [c for c in data["comments"] if c["user"]["login"].lower() == username.lower()]
-    repo_contributions = prs_opened + len(user_issues) + len(user_comments)
+    issues_opened = len(user_issues)
+
+    # Last active date
+    last_active = max(active_dates) if active_dates else "N/A"
 
     return {
-        "total_daily_commits": total_commits,
-        "total_weekly_commits": weekly_commit_count,
+        "total_commits": total_commits,
+        "weekly_commits": weekly_commit_count,
         "active_days": active_days,
-        "repo_contributions": repo_contributions,
         "lines_added": total_added,
         "lines_deleted": total_deleted,
         "prs_opened": prs_opened,
         "prs_merged": prs_merged,
-        "review_comments_received": review_comments_received,
-        "review_comments_given": review_comments_given,
+        "comments_received": comments_received,
+        "comments_given": comments_given,
+        "issues_opened": issues_opened,
         "avg_merge_time": avg_merge_time,
         "rejection_rate": rejection_rate,
+        "last_active": last_active,
+    }
+
+
+def compute_scores(metrics, config):
+    """Compute 4 component scores + total + classification from all-time metrics."""
+    m = metrics
+
+    # Read config values with defaults
+    consistency_max = float(config.get("consistency_max_points", 30))
+    collaboration_max = float(config.get("collaboration_max_points", 25))
+    code_volume_max = float(config.get("code_volume_max_points", 25))
+    quality_max = float(config.get("quality_max_points", 20))
+    pr_pts = float(config.get("pr_points_each", 2))
+    review_pts = float(config.get("review_points_each", 1.5))
+    issue_pts = float(config.get("issue_points_each", 1))
+    comment_pts = float(config.get("comment_points_each", 0.5))
+    lines_added_scale = float(config.get("lines_added_max_scale", 500))
+    lines_deleted_scale = float(config.get("lines_deleted_max_scale", 200))
+    merge_rate_max = float(config.get("merge_rate_max_points", 15))
+    feedback_max = float(config.get("feedback_max_points", 5))
+
+    # Consistency (max 30): active_day_ratio × 20 + commits_per_day × 10 (capped)
+    active_days = m["active_days"]
+    total_commits = m["total_commits"]
+    # Use days since bootcamp start or active_days as denominator
+    total_days = max(active_days, 1)
+    active_ratio = min(1.0, active_days / max(total_days, 1))
+    commits_per_day = total_commits / max(total_days, 1)
+    consistency = min(consistency_max, round(active_ratio * 20 + min(10, commits_per_day * 10), 1))
+
+    # Collaboration (max 25): PRs×2 + reviews×1.5 + issues×1 + comments×0.5 (capped per component)
+    collab_prs = min(8, m["prs_opened"] * pr_pts)
+    collab_reviews = min(7, m["comments_given"] * review_pts)
+    collab_issues = min(5, m["issues_opened"] * issue_pts)
+    collab_comments = min(5, (m["comments_given"] + m["comments_received"]) * comment_pts)
+    collaboration = min(collaboration_max, round(collab_prs + collab_reviews + collab_issues + collab_comments, 1))
+
+    # Code Volume (max 25): lines_added/500×15 + lines_deleted/200×10 (capped)
+    added_score = min(15, m["lines_added"] / lines_added_scale * 15)
+    deleted_score = min(10, m["lines_deleted"] / lines_deleted_scale * 10)
+    code_volume = min(code_volume_max, round(added_score + deleted_score, 1))
+
+    # Quality (max 20): merge_rate×15 + feedback×1 (capped at 5)
+    merge_rate = (m["prs_merged"] / m["prs_opened"]) if m["prs_opened"] > 0 else 0
+    quality_merge = min(merge_rate_max, merge_rate * merge_rate_max)
+    quality_feedback = min(feedback_max, m["comments_received"] * 1)
+    quality = min(quality_max, round(quality_merge + quality_feedback, 1))
+
+    total_score = round(consistency + collaboration + code_volume + quality, 1)
+
+    # Classification
+    if total_score >= 80:
+        classification = "EXCELLENT"
+    elif total_score >= 60:
+        classification = "GOOD"
+    elif total_score >= 40:
+        classification = "AVERAGE"
+    elif total_score >= 20:
+        classification = "NEEDS IMPROVEMENT"
+    else:
+        classification = "AT RISK"
+
+    return {
+        "consistency": consistency,
+        "collaboration": collaboration,
+        "code_volume": code_volume,
+        "quality": quality,
+        "total_score": total_score,
+        "classification": classification,
     }
 
 
@@ -286,64 +390,299 @@ def fetch_day(gh, sheets, ws, learners, base_repos, date_str):
         print(f"  Wrote {len(updates)} rows to Daily Raw Metrics")
 
 
-def update_metrics_tab(gh, sheets, learners, base_repos):
-    """Fetch all-time data and write to Metrics tab columns C-N."""
-    print("\nUpdating Metrics tab with all-time data...")
-    metrics_ws = sheets.spreadsheet.worksheet("Metrics")
-    rows = metrics_ws.get_all_values()
+def sort_daily_raw_metrics(ws):
+    """Sort Daily Raw Metrics by Date DESC, then Username ASC."""
+    print("\nSorting Daily Raw Metrics...")
+    all_data = ws.get_all_values()
+    if len(all_data) <= 1:
+        return
+    headers = all_data[0]
+    rows = all_data[1:]
 
-    # Build username -> row index map (row 3 onwards, 0-indexed in rows = index 2)
-    username_rows = {}
-    for i, row in enumerate(rows[2:], start=3):  # data starts at row 3
-        if len(row) >= 2 and row[1].strip():
-            username = row[1].strip().rstrip("/").split("/")[-1]
-            username_rows[username.lower()] = i
+    # Two-pass stable sort: secondary key first (Username ASC), then primary (Date DESC)
+    rows.sort(key=lambda r: r[0].lower() if r else "")
+    rows.sort(key=lambda r: r[1] if len(r) > 1 else "", reverse=True)
 
+    data = [headers] + rows
+    col = chr(64 + len(headers)) if len(headers) <= 26 else "Z"
+    ws.update(values=data, range_name=f"A1:{col}{len(data)}")
+    print(f"  Sorted {len(rows)} rows")
+
+
+def update_leaderboard(gh, sheets, learners, base_repos, config):
+    """Fetch all-time data, compute scores, write to Leaderboard tab."""
+    print("\nUpdating Leaderboard...")
     base_repo_data = fetch_base_repo_data(gh, base_repos, include_review_comments=True)
 
-    updates = []
+    leaderboard_rows = []
     for learner in learners:
         username = learner["username"]
-        row_num = username_rows.get(username.lower())
-        if not row_num:
-            continue
-
         print(f"  Fetching all-time data for {username}...")
         m = fetch_learner_alltime(gh, learner, base_repo_data)
+        scores = compute_scores(m, config)
 
-        # Metrics tab columns: C=Total Daily Commits, D=Total Weekly Commits,
-        # E=Active Days, F=Repo Contributions, G=Lines Added, H=Lines Deleted,
-        # I=PRs Opened, J=PRs Merged, K=PR Review Comments Received,
-        # L=PR Review Comments Given, M=Average PR Merge Time, N=PR Rejection Rate
-        updates.append({
-            "range": f"C{row_num}:N{row_num}",
-            "values": [[
-                m["total_daily_commits"],
-                m["total_weekly_commits"],
-                m["active_days"],
-                m["repo_contributions"],
-                m["lines_added"],
-                m["lines_deleted"],
-                m["prs_opened"],
-                m["prs_merged"],
-                m["review_comments_received"],
-                m["review_comments_given"],
-                m["avg_merge_time"],
-                m["rejection_rate"],
-            ]],
+        # Format merge time
+        mt = m["avg_merge_time"]
+        if mt == 0:
+            merge_time_str = "N/A"
+        elif mt < 1:
+            merge_time_str = f"{round(mt * 60)} min"
+        elif mt < 24:
+            merge_time_str = f"{round(mt, 1)} hrs"
+        else:
+            merge_time_str = f"{round(mt / 24, 1)} days"
+
+        # Format rejection rate
+        rejection_str = f"{round(m['rejection_rate'] * 100)}%"
+
+        leaderboard_rows.append({
+            "username": username,
+            "classification": scores["classification"],
+            "total_score": scores["total_score"],
+            "consistency": scores["consistency"],
+            "collaboration": scores["collaboration"],
+            "code_volume": scores["code_volume"],
+            "quality": scores["quality"],
+            "active_days": m["active_days"],
+            "total_commits": m["total_commits"],
+            "prs_opened": m["prs_opened"],
+            "prs_merged": m["prs_merged"],
+            "lines_added": m["lines_added"],
+            "lines_deleted": m["lines_deleted"],
+            "comments_received": m["comments_received"],
+            "comments_given": m["comments_given"],
+            "avg_merge_time": merge_time_str,
+            "rejection_rate": rejection_str,
+            "last_active": m["last_active"],
         })
 
-        print(f"    {username}: {m['total_daily_commits']} commits, {m['active_days']} active days, "
-              f"{m['prs_opened']} PRs, +{m['lines_added']}/-{m['lines_deleted']} lines")
+        print(f"    {username}: score={scores['total_score']}, {scores['classification']}")
 
-    if updates:
-        metrics_ws.batch_update(updates)
-        print(f"\n  Updated {len(updates)} rows in Metrics tab")
+    # Sort by total_score DESC
+    leaderboard_rows.sort(key=lambda r: r["total_score"], reverse=True)
+
+    # Build sheet rows with rank
+    sheet_rows = []
+    for rank, r in enumerate(leaderboard_rows, start=1):
+        sheet_rows.append([
+            rank, r["username"], r["classification"], r["total_score"],
+            r["consistency"], r["collaboration"], r["code_volume"], r["quality"],
+            r["active_days"], r["total_commits"], r["prs_opened"], r["prs_merged"],
+            r["lines_added"], r["lines_deleted"], r["comments_received"],
+            r["comments_given"], r["avg_merge_time"], r["rejection_rate"],
+            r["last_active"],
+        ])
+
+    lb_ws = sheets.get_worksheet("Leaderboard")
+    sheets.clear_and_write(lb_ws, LEADERBOARD_HEADERS, sheet_rows)
+    print(f"  Wrote {len(sheet_rows)} rows to Leaderboard")
+
+    return leaderboard_rows
+
+
+def write_daily_view(sheets, raw_ws):
+    """Read Daily Raw Metrics for last 14 days, compute Activity Score, write to Daily View."""
+    print("\nWriting Daily View...")
+    all_data = raw_ws.get_all_values()
+    if len(all_data) <= 1:
+        print("  No data in Daily Raw Metrics")
+        return
+
+    headers = all_data[0]
+    rows = all_data[1:]
+
+    # Get column indices from headers
+    col_map = {h: i for i, h in enumerate(headers)}
+    username_idx = col_map.get("Username", 0)
+    date_idx = col_map.get("Date", 1)
+    commits_idx = col_map.get("Commits", 2)
+    prs_opened_idx = col_map.get("PRs Opened", 3)
+    prs_merged_idx = col_map.get("PRs Merged", 4)
+    lines_added_idx = col_map.get("Lines Added", 8)
+    lines_deleted_idx = col_map.get("Lines Deleted", 9)
+    issue_comments_idx = col_map.get("Issue Comments", 6)
+    review_comments_idx = col_map.get("PR Review Comments Given", 7)
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%d")
+
+    # Collect all unique learners and dates in range
+    learners_seen = set()
+    dates_in_range = set()
+    daily_data = {}  # (username, date) -> row data
+
+    for row in rows:
+        if len(row) <= date_idx:
+            continue
+        date_str = row[date_idx]
+        username = row[username_idx]
+        if date_str >= cutoff:
+            learners_seen.add(username)
+            dates_in_range.add(date_str)
+            daily_data[(username, date_str)] = row
+
+    def safe_int(val):
+        try:
+            return int(float(val)) if val else 0
+        except (ValueError, TypeError):
+            return 0
+
+    # Build view rows — include 0-activity rows for all learners on all dates
+    view_rows = []
+    for date_str in sorted(dates_in_range, reverse=True):
+        for username in sorted(learners_seen, key=str.lower):
+            row = daily_data.get((username, date_str))
+            if row:
+                commits = safe_int(row[commits_idx] if len(row) > commits_idx else 0)
+                prs_o = safe_int(row[prs_opened_idx] if len(row) > prs_opened_idx else 0)
+                prs_m = safe_int(row[prs_merged_idx] if len(row) > prs_merged_idx else 0)
+                lines_a = safe_int(row[lines_added_idx] if len(row) > lines_added_idx else 0)
+                lines_d = safe_int(row[lines_deleted_idx] if len(row) > lines_deleted_idx else 0)
+                comments = (
+                    safe_int(row[issue_comments_idx] if len(row) > issue_comments_idx else 0)
+                    + safe_int(row[review_comments_idx] if len(row) > review_comments_idx else 0)
+                )
+            else:
+                commits = prs_o = prs_m = lines_a = lines_d = comments = 0
+
+            # Activity Score: min(10, commits×1(max3) + prs_opened×2(max4) + prs_merged×1(max2) + 1 if lines>0)
+            activity_score = min(10,
+                min(3, commits * 1)
+                + min(4, prs_o * 2)
+                + min(2, prs_m * 1)
+                + (1 if (lines_a + lines_d) > 0 else 0)
+            )
+
+            view_rows.append([
+                date_str, username, commits, prs_o, prs_m,
+                lines_a, lines_d, comments, activity_score,
+            ])
+
+    # Sort by Date DESC, then Activity Score DESC within each date
+    # Two-pass stable sort: secondary key first, then primary
+    view_rows.sort(key=lambda r: r[8], reverse=True)  # Activity Score DESC
+    view_rows.sort(key=lambda r: r[0], reverse=True)   # Date DESC (stable, preserves score order)
+    sorted_rows = view_rows
+
+    dv_ws = sheets.get_worksheet("Daily View")
+    sheets.clear_and_write(dv_ws, DAILY_VIEW_HEADERS, sorted_rows)
+    print(f"  Wrote {len(sorted_rows)} rows to Daily View")
+
+
+def write_alerts(sheets, leaderboard_rows, raw_ws, config):
+    """Write flagged learners to Alerts tab."""
+    print("\nWriting Alerts...")
+    inactive_days = int(config.get("inactive_threshold_days", 7))
+    at_risk_threshold = float(config.get("at_risk_score_threshold", 30))
+    declining_threshold = float(config.get("declining_score_threshold", 50))
+    declining_min_days = int(config.get("declining_active_days_min", 2))
+
+    # Read Daily Raw Metrics for recent activity check
+    all_data = raw_ws.get_all_values()
+    headers = all_data[0] if all_data else []
+    rows = all_data[1:] if len(all_data) > 1 else []
+
+    col_map = {h: i for i, h in enumerate(headers)}
+    username_idx = col_map.get("Username", 0)
+    date_idx = col_map.get("Date", 1)
+    commits_idx = col_map.get("Commits", 2)
+
+    today = datetime.now(timezone.utc).date()
+    inactive_cutoff = (today - timedelta(days=inactive_days)).strftime("%Y-%m-%d")
+    week_cutoff = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    # Build per-user recent activity
+    user_last_active = {}  # username -> last active date string
+    user_recent_active_days = {}  # username -> count of active days in last 7
+
+    for row in rows:
+        if len(row) <= max(username_idx, date_idx, commits_idx):
+            continue
+        username = row[username_idx]
+        date_str = row[date_idx]
+        try:
+            commits = int(float(row[commits_idx])) if row[commits_idx] else 0
+        except (ValueError, TypeError):
+            commits = 0
+
+        if commits > 0:
+            existing = user_last_active.get(username, "")
+            if date_str > existing:
+                user_last_active[username] = date_str
+
+            if date_str >= week_cutoff:
+                user_recent_active_days[username] = user_recent_active_days.get(username, 0) + 1
+
+    alert_rows = []
+    for entry in leaderboard_rows:
+        username = entry["username"]
+        score = entry["total_score"]
+        last_active = user_last_active.get(username, "Never")
+
+        alerts = []
+
+        # INACTIVE: no activity in 7+ days
+        if last_active == "Never" or last_active < inactive_cutoff:
+            alerts.append(("INACTIVE", "No activity in 7+ days"))
+
+        # AT RISK: score below threshold
+        if score < at_risk_threshold:
+            alerts.append(("AT RISK", f"Score {score} below {at_risk_threshold}"))
+
+        # DECLINING: score < 50 and < 2 active days in last 7
+        recent_days = user_recent_active_days.get(username, 0)
+        if score < declining_threshold and recent_days < declining_min_days:
+            # Don't double-flag if already INACTIVE
+            if not any(a[0] == "INACTIVE" for a in alerts):
+                alerts.append(("DECLINING", f"Score {score}, only {recent_days} active days this week"))
+
+        for alert_type, details in alerts:
+            alert_rows.append([
+                username, alert_type, details, last_active, score,
+            ])
+
+    alerts_ws = sheets.get_worksheet("Alerts")
+    sheets.clear_and_write(alerts_ws, ALERTS_HEADERS, alert_rows)
+    print(f"  Wrote {len(alert_rows)} alerts")
+
+
+def setup_sheet_structure(sheets):
+    """Ensure sheet has the correct tab layout: Roster, Leaderboard, Daily View, Alerts, Daily Raw Metrics, Config."""
+    print("Setting up sheet structure...")
+
+    # Rename Metrics → Roster (if not already done)
+    roster_ws = sheets.rename_worksheet("Metrics", "Roster")
+    if roster_ws:
+        print("  Renamed 'Metrics' → 'Roster'")
+        # Clear stats columns C-N (keep only A=email, B=GitHub account)
+        rows = roster_ws.get_all_values()
+        if rows and len(rows[0]) > 2:
+            # Build range to clear: C1 to last column, all rows
+            last_col = chr(64 + len(rows[0])) if len(rows[0]) <= 26 else "Z"
+            roster_ws.batch_clear([f"C1:{last_col}{len(rows)}"])
+            print("  Cleared columns C-N from Roster tab")
+    else:
+        # Neither Metrics nor Roster exists — ensure Roster tab exists
+        sheets.get_worksheet("Roster")
+
+    # Ensure all tabs exist (get_worksheet creates if missing)
+    sheets.get_worksheet("Leaderboard")
+    sheets.get_worksheet("Daily View")
+    sheets.get_worksheet("Alerts")
+    sheets.get_worksheet("Daily Raw Metrics")
+    sheets.get_worksheet("Config")
+
+    # Reorder tabs
+    desired_order = ["Roster", "Leaderboard", "Daily View", "Alerts", "Daily Raw Metrics", "Config"]
+    sheets.reorder_worksheets(desired_order)
+    print("  Tabs reordered: " + " | ".join(desired_order))
 
 
 def main():
     gh, sheets, config, base_repos, learners = load_env()
     print(f"Daily deep fetch for {len(learners)} learners")
+
+    # 0. Set up sheet structure (rename tabs, reorder)
+    setup_sheet_structure(sheets)
 
     # 1. Write today's daily data to Daily Raw Metrics
     ws = sheets.get_worksheet("Daily Raw Metrics")
@@ -354,8 +693,17 @@ def main():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     fetch_day(gh, sheets, ws, learners, base_repos, today)
 
-    # 2. Update Metrics tab with all-time aggregated data
-    update_metrics_tab(gh, sheets, learners, base_repos)
+    # 2. Sort Daily Raw Metrics
+    sort_daily_raw_metrics(ws)
+
+    # 3. Update Leaderboard with all-time scores
+    leaderboard_rows = update_leaderboard(gh, sheets, learners, base_repos, config)
+
+    # 4. Write Daily View (last 14 days)
+    write_daily_view(sheets, ws)
+
+    # 5. Write Alerts
+    write_alerts(sheets, leaderboard_rows, ws, config)
 
     print("\nDaily fetch complete.")
 

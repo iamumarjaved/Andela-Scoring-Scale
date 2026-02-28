@@ -108,6 +108,18 @@ def main():
         ws.batch_update(updates)
         print(f"  Wrote {len(updates)} rows")
 
+    # Sort Daily Raw Metrics: Date DESC, Username ASC
+    print("  Sorting Daily Raw Metrics...")
+    all_sorted = ws.get_all_values()
+    if len(all_sorted) > 1:
+        sort_headers = all_sorted[0]
+        sort_rows = all_sorted[1:]
+        sort_rows.sort(key=lambda r: r[0].lower() if r else "")
+        sort_rows.sort(key=lambda r: r[1] if len(r) > 1 else "", reverse=True)
+        sorted_data = [sort_headers] + sort_rows
+        col = chr(64 + len(sort_headers)) if len(sort_headers) <= 26 else "Z"
+        ws.update(values=sorted_data, range_name=f"A1:{col}{len(sorted_data)}")
+
     # Update last poll timestamp
     config_ws = sheets.get_worksheet("Config")
     all_config = config_ws.get_all_values()

@@ -13,11 +13,17 @@ def _parse_username_from_url(url):
     return url.strip().rstrip("/").split("/")[-1]
 
 
-def _load_learners_from_metrics(sheets, gh, base_repos):
-    """Read GitHub accounts from the Metrics tab and resolve their forks."""
-    try:
-        ws = sheets.spreadsheet.worksheet("Metrics")
-    except Exception:
+def _load_learners_from_roster(sheets, gh, base_repos):
+    """Read GitHub accounts from the Roster tab and resolve their forks.
+    Falls back to 'Metrics' tab for backwards compatibility during migration."""
+    ws = None
+    for tab_name in ("Roster", "Metrics"):
+        try:
+            ws = sheets.spreadsheet.worksheet(tab_name)
+            break
+        except Exception:
+            continue
+    if ws is None:
         return []
 
     rows = ws.get_all_values()
@@ -74,7 +80,7 @@ def load_env():
     config = sheets.read_config()
     base_repos = [r.strip() for r in config.get("base_repos", "ed-donner/llm_engineering").split(",")]
 
-    # Load learners from the Metrics tab
-    learners = _load_learners_from_metrics(sheets, gh, base_repos)
+    # Load learners from the Roster tab
+    learners = _load_learners_from_roster(sheets, gh, base_repos)
 
     return gh, sheets, config, base_repos, learners
