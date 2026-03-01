@@ -584,7 +584,17 @@ def write_alerts(sheets, leaderboard_rows, raw_ws, config):
     col_map = {h: i for i, h in enumerate(headers)}
     username_idx = col_map.get("Username", 0)
     date_idx = col_map.get("Date", 1)
-    commits_idx = col_map.get("Commits", 2)
+    # Activity columns: any non-zero value means the learner was active that day
+    activity_cols = [
+        col_map.get("Commits", 2),
+        col_map.get("PRs Opened", 3),
+        col_map.get("PRs Merged", 4),
+        col_map.get("Issues Opened", 5),
+        col_map.get("Issue Comments", 6),
+        col_map.get("PR Review Comments Given", 7),
+        col_map.get("Lines Added", 8),
+        col_map.get("Lines Deleted", 9),
+    ]
 
     today = datetime.now(timezone.utc).date()
     inactive_cutoff = (today - timedelta(days=inactive_days)).strftime("%Y-%m-%d")
@@ -594,17 +604,22 @@ def write_alerts(sheets, leaderboard_rows, raw_ws, config):
     user_last_active = {}  # username -> last active date string
     user_recent_active_days = {}  # username -> count of active days in last 7
 
+    def safe_num(val):
+        try:
+            return float(val) if val else 0
+        except (ValueError, TypeError):
+            return 0
+
     for row in rows:
-        if len(row) <= max(username_idx, date_idx, commits_idx):
+        if len(row) <= date_idx:
             continue
         username = row[username_idx]
         date_str = row[date_idx]
-        try:
-            commits = int(float(row[commits_idx])) if row[commits_idx] else 0
-        except (ValueError, TypeError):
-            commits = 0
 
-        if commits > 0:
+        # Check if ANY activity column is non-zero
+        has_activity = any(safe_num(row[c]) > 0 for c in activity_cols if c < len(row))
+
+        if has_activity:
             existing = user_last_active.get(username, "")
             if date_str > existing:
                 user_last_active[username] = date_str
@@ -616,7 +631,8 @@ def write_alerts(sheets, leaderboard_rows, raw_ws, config):
     for entry in leaderboard_rows:
         username = entry["username"]
         score = entry["total_score"]
-        last_active = user_last_active.get(username, "Never")
+        # Use leaderboard's last_active as fallback (covers all-time data beyond raw metrics)
+        last_active = user_last_active.get(username) or entry.get("last_active", "Never")
 
         alerts = []
 
