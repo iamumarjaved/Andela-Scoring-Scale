@@ -299,10 +299,15 @@ def compute_scores(metrics, config):
     # Consistency (max 30): active_day_ratio × 20 + commits_per_day × 10 (capped)
     active_days = m["active_days"]
     total_commits = m["total_commits"]
-    # Use days since bootcamp start or active_days as denominator
-    total_days = max(active_days, 1)
-    active_ratio = min(1.0, active_days / max(total_days, 1))
-    commits_per_day = total_commits / max(total_days, 1)
+    # Use days since bootcamp start as denominator
+    bootcamp_start_str = config.get("bootcamp_start_date", "2026-02-23")
+    try:
+        bootcamp_start = datetime.strptime(bootcamp_start_str, "%Y-%m-%d").date()
+    except ValueError:
+        bootcamp_start = datetime(2026, 2, 23).date()
+    total_days = max((datetime.now(timezone.utc).date() - bootcamp_start).days, 1)
+    active_ratio = min(1.0, active_days / total_days)
+    commits_per_day = total_commits / total_days
     consistency = min(consistency_max, round(active_ratio * 20 + min(10, commits_per_day * 10), 1))
 
     # Collaboration (max 25): PRs×2 + reviews×1.5 + issues×1 + comments×0.5 (capped per component)
@@ -700,12 +705,297 @@ def setup_sheet_structure(sheets):
     print("  Tabs reordered: " + " | ".join(desired_order))
 
 
+def ensure_config_defaults(sheets):
+    """Write missing config keys to Config tab so admins can see and edit them."""
+    print("\nEnsuring config defaults...")
+    defaults = [
+        ("bootcamp_start_date", "2026-02-23"),
+        ("inactive_threshold_days", "7"),
+        ("at_risk_score_threshold", "30"),
+        ("declining_score_threshold", "50"),
+        ("declining_active_days_min", "2"),
+        ("consistency_max_points", "30"),
+        ("collaboration_max_points", "25"),
+        ("code_volume_max_points", "25"),
+        ("quality_max_points", "20"),
+        ("pr_points_each", "2"),
+        ("review_points_each", "1.5"),
+        ("issue_points_each", "1"),
+        ("comment_points_each", "0.5"),
+        ("lines_added_max_scale", "500"),
+        ("lines_deleted_max_scale", "200"),
+        ("merge_rate_max_points", "15"),
+        ("feedback_max_points", "5"),
+    ]
+
+    ws = sheets.get_worksheet("Config")
+    existing = ws.get_all_values()
+    existing_keys = {row[0].strip() for row in existing if len(row) >= 1 and row[0].strip()}
+
+    missing = [[key, value] for key, value in defaults if key not in existing_keys]
+
+    if missing:
+        next_row = len(existing) + 1
+        updates = [
+            {"range": f"A{next_row + i}:B{next_row + i}", "values": [row_data]}
+            for i, row_data in enumerate(missing)
+        ]
+        ws.batch_update(updates)
+        print(f"  Added {len(missing)} missing config keys")
+    else:
+        print("  All config keys present")
+
+
+def format_sheets(sheets):
+    """Apply formatting, colors, filters, and conditional formatting to all tabs."""
+    print("\nFormatting sheets...")
+    sp = sheets.spreadsheet
+
+    def hex_to_rgb(hex_color):
+        """Convert hex color to Google Sheets RGB dict (0-1 range)."""
+        h = hex_color.lstrip("#")
+        return {
+            "red": int(h[0:2], 16) / 255,
+            "green": int(h[2:4], 16) / 255,
+            "blue": int(h[4:6], 16) / 255,
+        }
+
+    # --- Phase 1: Cleanup existing conditional formats and basic filters ---
+    metadata = sp.fetch_sheet_metadata()
+    cleanup_requests = []
+    for sheet_data in metadata.get("sheets", []):
+        sheet_id = sheet_data["properties"]["sheetId"]
+        # Delete existing conditional format rules in reverse order
+        cond_formats = sheet_data.get("conditionalFormats", [])
+        for i in range(len(cond_formats) - 1, -1, -1):
+            cleanup_requests.append({
+                "deleteConditionalFormatRule": {"sheetId": sheet_id, "index": i}
+            })
+        # Clear existing basic filter
+        if "basicFilter" in sheet_data:
+            cleanup_requests.append({"clearBasicFilter": {"sheetId": sheet_id}})
+
+    if cleanup_requests:
+        sp.batch_update({"requests": cleanup_requests})
+
+    # --- Phase 2: Build formatting requests ---
+    tab_names = ["Roster", "Leaderboard", "Daily View", "Alerts", "Daily Raw Metrics", "Config"]
+    tabs = {}
+    for name in tab_names:
+        try:
+            tabs[name] = sp.worksheet(name)
+        except Exception:
+            pass
+
+    tab_colors = {
+        "Roster": "#70AD47",
+        "Leaderboard": "#FFD700",
+        "Daily View": "#4472C4",
+        "Alerts": "#FF0000",
+        "Daily Raw Metrics": "#808080",
+        "Config": "#7030A0",
+    }
+
+    header_bg = hex_to_rgb("#1F3864")
+    header_fg = {"red": 1, "green": 1, "blue": 1}
+    requests = []
+
+    # Common formatting for all tabs
+    for tab_name, ws in tabs.items():
+        num_cols = ws.col_count
+        num_rows = ws.row_count
+
+        # Tab color
+        requests.append({
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": ws.id,
+                    "tabColorStyle": {"rgbColor": hex_to_rgb(tab_colors[tab_name])},
+                },
+                "fields": "tabColorStyle",
+            }
+        })
+
+        # Freeze row 1
+        requests.append({
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": ws.id,
+                    "gridProperties": {"frozenRowCount": 1},
+                },
+                "fields": "gridProperties.frozenRowCount",
+            }
+        })
+
+        # Bold white headers on dark navy background (row 1)
+        requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": ws.id,
+                    "startRowIndex": 0,
+                    "endRowIndex": 1,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": num_cols,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": header_bg,
+                        "textFormat": {"bold": True, "foregroundColor": header_fg},
+                        "horizontalAlignment": "CENTER",
+                    }
+                },
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+            }
+        })
+
+        # Auto-filter on data range
+        requests.append({
+            "setBasicFilter": {
+                "filter": {
+                    "range": {
+                        "sheetId": ws.id,
+                        "startRowIndex": 0,
+                        "endRowIndex": num_rows,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": num_cols,
+                    }
+                }
+            }
+        })
+
+        # Auto-resize columns
+        requests.append({
+            "autoResizeDimensions": {
+                "dimensions": {
+                    "sheetId": ws.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 0,
+                    "endIndex": num_cols,
+                }
+            }
+        })
+
+    # --- Leaderboard: Classification col C (index 2) conditional formatting ---
+    if "Leaderboard" in tabs:
+        lb_ws = tabs["Leaderboard"]
+        classification_colors = [
+            ("EXCELLENT", "#C6EFCE"),
+            ("GOOD", "#BDD7EE"),
+            ("AVERAGE", "#FFF2CC"),
+            ("NEEDS IMPROVEMENT", "#FCE4CC"),
+            ("AT RISK", "#FFC7CE"),
+        ]
+        for idx, (text, color) in enumerate(classification_colors):
+            requests.append({
+                "addConditionalFormatRule": {
+                    "rule": {
+                        "ranges": [{
+                            "sheetId": lb_ws.id,
+                            "startRowIndex": 1, "endRowIndex": 1000,
+                            "startColumnIndex": 2, "endColumnIndex": 3,
+                        }],
+                        "booleanRule": {
+                            "condition": {
+                                "type": "TEXT_EQ",
+                                "values": [{"userEnteredValue": text}],
+                            },
+                            "format": {"backgroundColor": hex_to_rgb(color)},
+                        },
+                    },
+                    "index": idx,
+                }
+            })
+
+        # Bold rank column A
+        requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": lb_ws.id,
+                    "startRowIndex": 1, "endRowIndex": 1000,
+                    "startColumnIndex": 0, "endColumnIndex": 1,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "textFormat": {"bold": True},
+                        "horizontalAlignment": "CENTER",
+                    }
+                },
+                "fields": "userEnteredFormat(textFormat,horizontalAlignment)",
+            }
+        })
+
+    # --- Daily View: Activity Score col I (index 8) conditional formatting ---
+    if "Daily View" in tabs:
+        dv_ws = tabs["Daily View"]
+        dv_rules = [
+            {"type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "8"}], "color": "#C6EFCE"},
+            {"type": "NUMBER_BETWEEN", "values": [{"userEnteredValue": "5"}, {"userEnteredValue": "7"}], "color": "#FFF2CC"},
+            {"type": "NUMBER_BETWEEN", "values": [{"userEnteredValue": "3"}, {"userEnteredValue": "4"}], "color": "#FCE4CC"},
+            {"type": "NUMBER_LESS", "values": [{"userEnteredValue": "3"}], "color": "#FFC7CE"},
+        ]
+        for idx, rule in enumerate(dv_rules):
+            requests.append({
+                "addConditionalFormatRule": {
+                    "rule": {
+                        "ranges": [{
+                            "sheetId": dv_ws.id,
+                            "startRowIndex": 1, "endRowIndex": 1000,
+                            "startColumnIndex": 8, "endColumnIndex": 9,
+                        }],
+                        "booleanRule": {
+                            "condition": {"type": rule["type"], "values": rule["values"]},
+                            "format": {"backgroundColor": hex_to_rgb(rule["color"])},
+                        },
+                    },
+                    "index": idx,
+                }
+            })
+
+    # --- Alerts: Alert Type col B (index 1) conditional formatting ---
+    if "Alerts" in tabs:
+        alerts_ws = tabs["Alerts"]
+        alert_colors = [
+            ("INACTIVE", "#FFC7CE"),
+            ("AT RISK", "#FCE4CC"),
+            ("DECLINING", "#FFF2CC"),
+        ]
+        for idx, (text, color) in enumerate(alert_colors):
+            requests.append({
+                "addConditionalFormatRule": {
+                    "rule": {
+                        "ranges": [{
+                            "sheetId": alerts_ws.id,
+                            "startRowIndex": 1, "endRowIndex": 1000,
+                            "startColumnIndex": 1, "endColumnIndex": 2,
+                        }],
+                        "booleanRule": {
+                            "condition": {
+                                "type": "TEXT_EQ",
+                                "values": [{"userEnteredValue": text}],
+                            },
+                            "format": {"backgroundColor": hex_to_rgb(color)},
+                        },
+                    },
+                    "index": idx,
+                }
+            })
+
+    # Send all formatting requests in one batch
+    if requests:
+        sp.batch_update({"requests": requests})
+
+    print("  Formatting applied to all tabs")
+
+
 def main():
     gh, sheets, config, base_repos, learners = load_env()
     print(f"Daily deep fetch for {len(learners)} learners")
 
     # 0. Set up sheet structure (rename tabs, reorder)
     setup_sheet_structure(sheets)
+
+    # 0b. Ensure all config defaults exist
+    ensure_config_defaults(sheets)
 
     # 1. Write today's daily data to Daily Raw Metrics
     ws = sheets.get_worksheet("Daily Raw Metrics")
@@ -727,6 +1017,9 @@ def main():
 
     # 5. Write Alerts
     write_alerts(sheets, leaderboard_rows, ws, config)
+
+    # 6. Apply formatting to all tabs
+    format_sheets(sheets)
 
     print("\nDaily fetch complete.")
 
