@@ -723,9 +723,9 @@ def write_alerts(sheets, leaderboard_rows, raw_ws, config):
 
         alerts = []
 
-        # INACTIVE: no activity in 7+ days
-        if last_active == "Never" or last_active < inactive_cutoff:
-            alerts.append(("INACTIVE", "No activity in 7+ days"))
+        # INACTIVE: no activity in N+ days
+        if last_active in ("Never", "N/A") or last_active <= inactive_cutoff:
+            alerts.append(("INACTIVE", f"No activity in {inactive_days}+ days"))
 
         # AT RISK: score below threshold
         if score < at_risk_threshold:
