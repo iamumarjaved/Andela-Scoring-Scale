@@ -1,312 +1,272 @@
-# Google Sheets Formulas Reference
+# Scoring System & Sheet Reference
 
-Copy-paste-ready formulas for all tabs. The scripts write raw data to **Daily Raw Metrics**; everything else is formula-driven.
-
----
-
-## Tab 1: Daily Raw Metrics
-
-**Headers (Row 1):** Written automatically by the scripts.
-
-| Col | Header |
-|-----|--------|
-| A | Username |
-| B | Date |
-| C | Commits |
-| D | PRs Opened |
-| E | PRs Merged |
-| F | Issues Opened |
-| G | Issue Comments |
-| H | PR Review Comments Given |
-| I | Lines Added |
-| J | Lines Deleted |
-| K | PR Avg Merge Time (hrs) |
-| L | PR Rejection Rate |
-| M | Last Updated |
-
-No formulas needed — data is written by `poll.py` and `daily_fetch.py`.
+Complete reference for all Google Sheets tabs, column definitions, scoring formulas, and configuration options. All data is computed by the automated pipeline and written directly to the sheet — no manual formulas required.
 
 ---
 
-## Tab 2: Performance Summary
+## Tab Overview
 
-**Headers (Row 1):**
+| Tab | Purpose | Data Source |
+|-----|---------|-------------|
+| **Roster** | Learner enrollment list (email, GitHub username) | Manual / auto-discovered |
+| **Leaderboard** | Ranked scores, classifications, and all-time metrics | `daily_fetch.py` |
+| **Daily View** | Per-day per-learner activity with Activity Score (last 14 days) | `daily_fetch.py` |
+| **Alerts** | Flagged learners: INACTIVE, AT RISK, DECLINING | `daily_fetch.py` |
+| **Daily Raw Metrics** | Granular daily data per learner | `poll.py` + `daily_fetch.py` |
+| **Config** | All scoring parameters, thresholds, and settings | Admin-editable |
 
-| Col | Header |
-|-----|--------|
-| A | Username |
-| B | Total Days |
-| C | Active Days |
-| D | Total Commits |
-| E | Total PRs Opened |
-| F | Total PRs Merged |
-| G | Total Issues |
-| H | Total Issue Comments |
-| I | Total Review Comments Given |
-| J | Total Lines Added |
-| K | Total Lines Deleted |
-| L | Avg Merge Time (hrs) |
-| M | Avg Rejection Rate |
-| N | Consistency Score (30) |
-| O | Collaboration Score (25) |
-| P | Code Volume Score (25) |
-| Q | Quality Score (20) |
-| R | Total Score (100) |
-| S | Classification |
-| T | Current Streak (days) |
-| U | Last Active Date |
-
-### Setup
-
-1. Put unique usernames in column A starting from A2. Use this formula in A2 and drag down:
-   ```
-   =IFERROR(INDEX(SORT(UNIQUE('Daily Raw Metrics'!A2:A)), ROW()-1), "")
-   ```
-
-2. **Total Days (B2):**
-   ```
-   =IF(A2="","",COUNTUNIQUE(FILTER('Daily Raw Metrics'!B:B, 'Daily Raw Metrics'!A:A=A2)))
-   ```
-
-3. **Active Days (C2):** Days with at least 1 commit
-   ```
-   =IF(A2="","",COUNTIFS('Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!C:C, ">"&0))
-   ```
-
-4. **Total Commits (D2):**
-   ```
-   =IF(A2="","",SUMIF('Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!C:C))
-   ```
-
-5. **Total PRs Opened (E2):**
-   ```
-   =IF(A2="","",SUMIF('Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!D:D))
-   ```
-
-6. **Total PRs Merged (F2):**
-   ```
-   =IF(A2="","",SUMIF('Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!E:E))
-   ```
-
-7. **Total Issues (G2):**
-   ```
-   =IF(A2="","",SUMIF('Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!F:F))
-   ```
-
-8. **Total Issue Comments (H2):**
-   ```
-   =IF(A2="","",SUMIF('Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!G:G))
-   ```
-
-9. **Total Review Comments Given (I2):**
-   ```
-   =IF(A2="","",SUMIF('Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!H:H))
-   ```
-
-10. **Total Lines Added (J2):**
-    ```
-    =IF(A2="","",SUMIF('Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!I:I))
-    ```
-
-11. **Total Lines Deleted (K2):**
-    ```
-    =IF(A2="","",SUMIF('Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!J:J))
-    ```
-
-12. **Avg Merge Time (L2):**
-    ```
-    =IF(A2="","",IFERROR(AVERAGEIFS('Daily Raw Metrics'!K:K, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!K:K, ">"&0), 0))
-    ```
-
-13. **Avg Rejection Rate (M2):**
-    ```
-    =IF(A2="","",IFERROR(AVERAGEIFS('Daily Raw Metrics'!L:L, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!L:L, ">"&0), 0))
-    ```
-
-### Scoring Formulas
-
-14. **Consistency Score — 30 points (N2):**
-    ```
-    =IF(A2="","",MIN(30, ROUND((C2/MAX(B2,1))*20 + MIN(10, D2/MAX(B2,1)*10), 1)))
-    ```
-    - Active day ratio: up to 20 pts (active_days / total_days × 20)
-    - Commit frequency: up to 10 pts (commits_per_day × 10, capped at 10)
-
-15. **Collaboration Score — 25 points (O2):**
-    ```
-    =IF(A2="","",MIN(25, ROUND(MIN(8, E2*2) + MIN(7, I2*1.5) + MIN(5, G2) + MIN(5, H2*0.5), 1)))
-    ```
-    - PRs: up to 8 pts (2 per PR)
-    - Reviews given: up to 7 pts (1.5 per review)
-    - Issues: up to 5 pts (1 per issue)
-    - Comments: up to 5 pts (0.5 per comment)
-
-16. **Code Volume Score — 25 points (P2):**
-    ```
-    =IF(A2="","",MIN(25, ROUND(MIN(15, J2/500*15) + MIN(10, K2/200*10), 1)))
-    ```
-    - Lines added: up to 15 pts (linear scale, 500 lines = max)
-    - Lines deleted: up to 10 pts (linear scale, 200 lines = max)
-
-17. **Quality Score — 20 points (Q2):**
-    ```
-    =IF(A2="","",MIN(20, ROUND(IF(E2>0, (F2/E2)*15, 0) + MIN(5, I2*1), 1)))
-    ```
-    - Merge rate: up to 15 pts (merged / opened × 15)
-    - Feedback received (review comments): up to 5 pts
-
-18. **Total Score (R2):**
-    ```
-    =IF(A2="","",N2+O2+P2+Q2)
-    ```
-
-19. **Classification (S2):**
-    ```
-    =IF(A2="","",IF(R2>=80,"EXCELLENT",IF(R2>=60,"GOOD",IF(R2>=40,"AVERAGE",IF(R2>=20,"NEEDS IMPROVEMENT","AT RISK")))))
-    ```
-
-20. **Current Streak (T2):** (Approximate — counts consecutive recent active days)
-    ```
-    =IF(A2="","",COUNTIFS('Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!C:C, ">"&0, 'Daily Raw Metrics'!B:B, ">="&TEXT(TODAY()-7,"YYYY-MM-DD")))
-    ```
-
-21. **Last Active Date (U2):**
-    ```
-    =IF(A2="","",MAXIFS('Daily Raw Metrics'!B:B, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!C:C, ">"&0))
-    ```
+All data is filtered to only include activity **after the bootcamp start date** (configured in Config tab, default: `2026-02-23`).
 
 ---
 
-## Tab 3: Weekly Snapshot
+## Tab 1: Roster
 
-**Headers (Row 1):**
+| Col | Header | Description |
+|-----|--------|-------------|
+| A | Email | Learner's email address |
+| B | GitHub Account | GitHub username (used for fork discovery) |
 
-| Col | Header |
-|-----|--------|
-| A | Username |
-| B | Week Start |
-| C | Week End |
-| D | Commits |
-| E | PRs Opened |
-| F | PRs Merged |
-| G | Issues |
-| H | Comments |
-| I | Lines Added |
-| J | Lines Deleted |
+Learners are auto-discovered by scanning forks of the configured base repositories. Non-fork learners can be added via `manual_users` in the Config tab.
 
-### Setup
+---
 
-Put usernames in column A and week start date in B2 (e.g., `2026-02-23`). Set C2:
+## Tab 2: Leaderboard
+
+Ranked view of all learners with computed scores and all-time metrics.
+
+| Col | Header | Description |
+|-----|--------|-------------|
+| A | Rank | Position by Total Score (descending) |
+| B | Learner | GitHub username |
+| C | Classification | EXCELLENT / GOOD / AVERAGE / NEEDS IMPROVEMENT / AT RISK |
+| D | Total Score | Sum of all 4 component scores (max 100) |
+| E | Consistency | Active day ratio + commit frequency (max configurable, default 30) |
+| F | Collaboration | PRs + reviews + issues + comments (max configurable, default 25) |
+| G | Code Volume | Lines added + deleted (max configurable, default 25) |
+| H | Quality | PR merge rate + feedback received (max configurable, default 20) |
+| I | Active Days | Number of unique days with activity since bootcamp start |
+| J | Total Commits | Total commits on learner's fork since bootcamp start |
+| K | PRs Opened | Pull requests opened on base repo since bootcamp start |
+| L | PRs Merged | Pull requests merged on base repo since bootcamp start |
+| M | Lines Added | Total lines added across all PRs |
+| N | Lines Deleted | Total lines deleted across all PRs |
+| O | Comments Received | Comments from others on learner's PRs (issue-style + inline review) |
+| P | Comments Given | Comments by learner on any PR (issue-style + inline review) |
+| Q | Avg Merge Time | Average time from PR creation to merge (formatted: min/hrs/days) |
+| R | Rejection Rate | Percentage of closed PRs that were not merged |
+| S | Last Active | Most recent date with any activity |
+| T | Last Comment | Text of the most recent comment on learner's PRs (truncated to 200 chars) |
+
+---
+
+## Tab 3: Daily View
+
+Per-day breakdown for the last 14 days, sorted by date (descending) then Activity Score (descending).
+
+| Col | Header | Description |
+|-----|--------|-------------|
+| A | Date | Activity date (YYYY-MM-DD) |
+| B | Learner | GitHub username |
+| C | Commits | Commits on that day |
+| D | PRs Opened | PRs opened on that day |
+| E | PRs Merged | PRs merged on that day |
+| F | Lines Added | Lines added on that day |
+| G | Lines Deleted | Lines deleted on that day |
+| H | Comments | Issue comments + PR review comments on that day |
+| I | Activity Score | Daily activity score (0-10, see formula below) |
+
+### Activity Score Formula (0-10)
+
 ```
-=IF(B2="","",TEXT(DATEVALUE(B2)+6,"YYYY-MM-DD"))
+Activity Score = min(10,
+    min(3, commits * 1)
+  + min(4, prs_opened * 2)
+  + min(2, prs_merged * 1)
+  + (1 if lines_added + lines_deleted > 0 else 0)
+)
 ```
 
-### Formulas (Row 2, drag down)
-
-1. **Weekly Commits (D2):**
-   ```
-   =IF(A2="","",SUMIFS('Daily Raw Metrics'!C:C, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!B:B, ">="&B2, 'Daily Raw Metrics'!B:B, "<="&C2))
-   ```
-
-2. **Weekly PRs Opened (E2):**
-   ```
-   =IF(A2="","",SUMIFS('Daily Raw Metrics'!D:D, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!B:B, ">="&B2, 'Daily Raw Metrics'!B:B, "<="&C2))
-   ```
-
-3. **Weekly PRs Merged (F2):**
-   ```
-   =IF(A2="","",SUMIFS('Daily Raw Metrics'!E:E, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!B:B, ">="&B2, 'Daily Raw Metrics'!B:B, "<="&C2))
-   ```
-
-4. **Weekly Issues (G2):**
-   ```
-   =IF(A2="","",SUMIFS('Daily Raw Metrics'!F:F, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!B:B, ">="&B2, 'Daily Raw Metrics'!B:B, "<="&C2))
-   ```
-
-5. **Weekly Comments (H2):**
-   ```
-   =IF(A2="","",SUMIFS('Daily Raw Metrics'!G:G, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!B:B, ">="&B2, 'Daily Raw Metrics'!B:B, "<="&C2))
-   ```
-
-6. **Weekly Lines Added (I2):**
-   ```
-   =IF(A2="","",SUMIFS('Daily Raw Metrics'!I:I, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!B:B, ">="&B2, 'Daily Raw Metrics'!B:B, "<="&C2))
-   ```
-
-7. **Weekly Lines Deleted (J2):**
-   ```
-   =IF(A2="","",SUMIFS('Daily Raw Metrics'!J:J, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!B:B, ">="&B2, 'Daily Raw Metrics'!B:B, "<="&C2))
-   ```
+**Conditional formatting:**
+- Score >= 8: Green
+- Score 5-7: Yellow
+- Score 3-4: Orange
+- Score < 3: Red
 
 ---
 
 ## Tab 4: Alerts
 
-**Headers (Row 1):**
+Flagged learners who may need attention. Updated daily.
 
-| Col | Header |
-|-----|--------|
-| A | Username |
-| B | Alert Type |
-| C | Details |
-| D | Last Active |
-| E | Total Score |
+| Col | Header | Description |
+|-----|--------|-------------|
+| A | Learner | GitHub username |
+| B | Alert Type | INACTIVE / AT RISK / DECLINING |
+| C | Details | Human-readable explanation |
+| D | Last Active | Most recent active date |
+| E | Score | Current total score |
 
-### Setup
+### Alert Conditions
 
-Link usernames from Performance Summary. Put in A2:
-```
-=IFERROR(INDEX('Performance Summary'!A:A, ROW()), "")
-```
+| Alert | Trigger | Config Keys |
+|-------|---------|-------------|
+| **INACTIVE** | No activity in N+ days | `inactive_threshold_days` (default: 7) |
+| **AT RISK** | Total score below threshold | `at_risk_score_threshold` (default: 30) |
+| **DECLINING** | Score below threshold AND fewer than N active days in last 7 | `declining_score_threshold` (default: 50), `declining_active_days_min` (default: 2) |
 
-### Formulas (Row 2, drag down)
-
-1. **Alert Type (B2):**
-   ```
-   =IF(A2="","",IF(MAXIFS('Daily Raw Metrics'!B:B, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!C:C, ">"&0)<TEXT(TODAY()-7,"YYYY-MM-DD"), "INACTIVE", IF('Performance Summary'!R2<30, "AT RISK", IF(AND('Performance Summary'!R2<50, COUNTIFS('Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!C:C, ">"&0, 'Daily Raw Metrics'!B:B, ">="&TEXT(TODAY()-7,"YYYY-MM-DD"))<2), "DECLINING", "OK"))))
-   ```
-
-2. **Details (C2):**
-   ```
-   =IF(B2="INACTIVE","No activity in 7+ days",IF(B2="AT RISK","Score below 30",IF(B2="DECLINING","Score <50 and <2 active days this week","")))
-   ```
-
-3. **Last Active (D2):**
-   ```
-   =IF(A2="","",IFERROR(MAXIFS('Daily Raw Metrics'!B:B, 'Daily Raw Metrics'!A:A, A2, 'Daily Raw Metrics'!C:C, ">"&0), "Never"))
-   ```
-
-4. **Total Score (E2):**
-   ```
-   =IF(A2="","",IFERROR('Performance Summary'!R2, 0))
-   ```
+**Conditional formatting:** INACTIVE = Red, AT RISK = Orange, DECLINING = Yellow.
 
 ---
 
-## Tab 5: Config
+## Tab 5: Daily Raw Metrics
 
-Set up the following key-value pairs (Column A = Key, Column B = Value):
+Granular per-learner per-day data. Written by both `poll.py` (every 30 min) and `daily_fetch.py` (daily).
 
-| Row | Key | Default Value | Description |
-|-----|-----|---------------|-------------|
-| 1 | base_repos | ed-donner/llm_engineering | Comma-separated list of owner/repo |
-| 2 | excluded_users | ed-donner | Comma-separated usernames to exclude |
-| 3 | manual_users | | Semi-colon separated: user,fork,base;... |
-| 4 | last_poll_timestamp | | Auto-updated by poll.py |
-| 5 | bootcamp_start_date | 2026-02-01 | For backfill reference |
-| 6 | inactive_threshold_days | 7 | Days without activity = inactive |
-| 7 | at_risk_score_threshold | 30 | Score below this = at risk |
-| 8 | declining_score_threshold | 50 | Score below this + low recent activity |
-| 9 | declining_active_days_min | 2 | Min active days in last week |
-| 10 | consistency_max_points | 30 | Max points for consistency |
-| 11 | collaboration_max_points | 25 | Max points for collaboration |
-| 12 | code_volume_max_points | 25 | Max points for code volume |
-| 13 | quality_max_points | 20 | Max points for quality |
-| 14 | pr_points_each | 2 | Points per PR opened |
-| 15 | review_points_each | 1.5 | Points per review comment |
-| 16 | issue_points_each | 1 | Points per issue opened |
-| 17 | comment_points_each | 0.5 | Points per comment |
-| 18 | lines_added_max_scale | 500 | Lines added for max score |
-| 19 | lines_deleted_max_scale | 200 | Lines deleted for max score |
-| 20 | merge_rate_max_points | 15 | Max points from merge rate |
-| 21 | feedback_max_points | 5 | Max points from feedback |
+| Col | Header | Description |
+|-----|--------|-------------|
+| A | Username | GitHub username |
+| B | Date | Activity date (YYYY-MM-DD) |
+| C | Commits | Commits on fork that day |
+| D | PRs Opened | PRs created on base repo that day |
+| E | PRs Merged | PRs merged on base repo that day |
+| F | Issues Opened | Issues created on base repo that day |
+| G | Issue Comments | Issue comments by learner that day |
+| H | PR Review Comments Given | Inline review comments by learner that day |
+| I | Lines Added | Lines added across commits that day |
+| J | Lines Deleted | Lines deleted across commits that day |
+| K | PR Avg Merge Time (hrs) | Average merge time for PRs merged that day |
+| L | PR Rejection Rate | Fraction of PRs closed-without-merge that day |
+| M | Last Updated | Timestamp of last data write |
+
+Sorted by Date descending, then Username ascending.
+
+---
+
+## Tab 6: Config
+
+All scoring parameters, thresholds, and operational settings. **Admins can edit values directly in the sheet** — changes take effect on the next scheduled run.
+
+### General Settings
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `bootcamp_start_date` | `2026-02-23` | Only count activity after this date |
+| `base_repos` | *(set in sheet)* | Comma-separated list of base repositories (owner/repo) |
+| `excluded_users` | *(set in sheet)* | Comma-separated usernames to exclude from tracking |
+| `manual_users` | *(empty)* | Non-fork learners: `user,fork,base;user2,fork2,base2` |
+
+### Alert Thresholds
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `inactive_threshold_days` | `7` | Days without activity to trigger INACTIVE alert |
+| `at_risk_score_threshold` | `30` | Score below this triggers AT RISK alert |
+| `declining_score_threshold` | `50` | Score below this (with low recent activity) triggers DECLINING |
+| `declining_active_days_min` | `2` | Minimum active days in last 7 to avoid DECLINING flag |
+
+### Consistency Scoring (default max: 30 points)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `consistency_max_points` | `30` | Maximum points for Consistency component |
+| `consistency_active_days_weight` | `20` | Points allocated to active day ratio |
+| `consistency_commits_weight` | `10` | Points allocated to commits-per-day rate |
+
+**Formula:**
+```
+active_ratio     = min(1.0, active_days / days_since_bootcamp_start)
+commits_per_day  = total_commits / days_since_bootcamp_start
+
+Consistency = min(consistency_max_points,
+    active_ratio * consistency_active_days_weight
+  + min(consistency_commits_weight, commits_per_day * consistency_commits_weight)
+)
+```
+
+### Collaboration Scoring (default max: 25 points)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `collaboration_max_points` | `25` | Maximum points for Collaboration component |
+| `pr_points_each` | `2` | Points per PR opened |
+| `review_points_each` | `1.5` | Points per review comment given |
+| `issue_points_each` | `1` | Points per issue opened |
+| `comment_points_each` | `0.5` | Points per comment (given + received) |
+| `collab_pr_cap` | `8` | Max points from PRs |
+| `collab_review_cap` | `7` | Max points from review comments |
+| `collab_issue_cap` | `5` | Max points from issues |
+| `collab_comment_cap` | `5` | Max points from comments |
+
+**Formula:**
+```
+collab_prs      = min(collab_pr_cap,      prs_opened * pr_points_each)
+collab_reviews  = min(collab_review_cap,   comments_given * review_points_each)
+collab_issues   = min(collab_issue_cap,    issues_opened * issue_points_each)
+collab_comments = min(collab_comment_cap,  (comments_given + comments_received) * comment_points_each)
+
+Collaboration = min(collaboration_max_points, sum of above)
+```
+
+### Code Volume Scoring (default max: 25 points)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `code_volume_max_points` | `25` | Maximum points for Code Volume component |
+| `lines_added_max_scale` | `500` | Lines added needed for max sub-score |
+| `lines_deleted_max_scale` | `200` | Lines deleted needed for max sub-score |
+| `code_volume_added_weight` | `15` | Max points from lines added |
+| `code_volume_deleted_weight` | `10` | Max points from lines deleted |
+
+**Formula:**
+```
+added_score   = min(code_volume_added_weight,   lines_added / lines_added_max_scale * code_volume_added_weight)
+deleted_score = min(code_volume_deleted_weight,  lines_deleted / lines_deleted_max_scale * code_volume_deleted_weight)
+
+Code Volume = min(code_volume_max_points, added_score + deleted_score)
+```
+
+### Quality Scoring (default max: 20 points)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `quality_max_points` | `20` | Maximum points for Quality component |
+| `merge_rate_max_points` | `15` | Max points from PR merge rate |
+| `feedback_max_points` | `5` | Max points from feedback received |
+| `feedback_points_each` | `1` | Points per comment received on learner's PRs |
+
+**Formula:**
+```
+merge_rate       = prs_merged / prs_opened  (0 if no PRs)
+quality_merge    = min(merge_rate_max_points, merge_rate * merge_rate_max_points)
+quality_feedback = min(feedback_max_points, comments_received * feedback_points_each)
+
+Quality = min(quality_max_points, quality_merge + quality_feedback)
+```
+
+### Classification Thresholds
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `classify_excellent` | `80` | Score >= this = **EXCELLENT** |
+| `classify_good` | `60` | Score >= this = **GOOD** |
+| `classify_average` | `40` | Score >= this = **AVERAGE** |
+| `classify_needs_improvement` | `20` | Score >= this = **NEEDS IMPROVEMENT** |
+| *(below all thresholds)* | | **AT RISK** |
+
+### Total Score
+
+```
+Total Score = Consistency + Collaboration + Code Volume + Quality  (max 100)
+```
+
+---
+
+## Sheet Formatting
+
+Applied automatically on every run:
+
+- **All tabs**: Frozen header row, navy background with white bold text, auto-filters, auto-resized columns
+- **Tab colors**: Roster (green), Leaderboard (gold), Daily View (blue), Alerts (red), Daily Raw Metrics (grey), Config (purple)
+- **Leaderboard**: Classification column color-coded (EXCELLENT=green, GOOD=blue, AVERAGE=yellow, NEEDS IMPROVEMENT=orange, AT RISK=red). Rank column bold + centered.
+- **Daily View**: Activity Score column color-coded by value range
+- **Alerts**: Alert Type column color-coded by severity
