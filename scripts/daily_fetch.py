@@ -731,12 +731,13 @@ def write_alerts(sheets, leaderboard_rows, raw_ws, config):
         if score < at_risk_threshold:
             alerts.append(("AT RISK", f"Score {score} below {at_risk_threshold}"))
 
-        # DECLINING: score < 50 and < 2 active days in last 7
+        # DECLINING: score below threshold and fewer than min active days in last 7
         recent_days = user_recent_active_days.get(username, 0)
         if score < declining_threshold and recent_days < declining_min_days:
             # Don't double-flag if already INACTIVE
             if not any(a[0] == "INACTIVE" for a in alerts):
-                alerts.append(("DECLINING", f"Score {score}, only {recent_days} active days this week"))
+                day_word = "day" if recent_days == 1 else "days"
+                alerts.append(("DECLINING", f"Score {score} (below {declining_threshold}), only {recent_days} active {day_word} in last 7 days"))
 
         for alert_type, details in alerts:
             alert_rows.append([
