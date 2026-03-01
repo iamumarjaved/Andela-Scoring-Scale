@@ -1,11 +1,25 @@
+"""GitHub REST API client with automatic pagination and rate-limit handling."""
+
 import time
 import requests
 
 
 class GitHubClient:
+    """Wrapper around the GitHub REST API v3.
+
+    Provides methods for fetching repositories, commits, pull requests,
+    issues, and comments with automatic pagination, retry/backoff on
+    server errors, and rate-limit sleep.
+    """
+
     BASE_URL = "https://api.github.com"
 
     def __init__(self, token):
+        """Initialize with a GitHub personal access token.
+
+        Args:
+            token: GitHub PAT with repo read access.
+        """
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"token {token}",
@@ -13,7 +27,20 @@ class GitHubClient:
         })
 
     def _request(self, url, params=None, max_retries=3):
-        """GET with retry/backoff and automatic pagination."""
+        """Make a GET request with retry, backoff, and automatic pagination.
+
+        Handles rate limiting by sleeping until the reset window, retries
+        on 5xx errors with exponential backoff, and follows pagination
+        links to collect all results.
+
+        Args:
+            url: The full API URL to request.
+            params: Optional query parameters dict.
+            max_retries: Maximum retry attempts per page.
+
+        Returns:
+            A list of results (for paginated endpoints) or a single dict.
+        """
         results = []
         backoff = 1
 
@@ -45,21 +72,39 @@ class GitHubClient:
             else:
                 resp.raise_for_status()
 
-            # Follow pagination
             url = resp.links.get("next", {}).get("url")
-            params = None  # params are baked into the next URL
+            params = None
 
         return results
 
     def get_forks(self, owner, repo):
-        """List all forks of a repo (paginated)."""
+        """List all forks of a repository.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+
+        Returns:
+            List of fork dicts from the GitHub API.
+        """
         return self._request(
             f"{self.BASE_URL}/repos/{owner}/{repo}/forks",
             params={"per_page": 100, "sort": "oldest"},
         )
 
     def get_commits(self, owner, repo, since=None, until=None, author=None):
-        """Commits in a date range, optionally filtered by author."""
+        """Fetch commits, optionally filtered by date range and author.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            since: Optional ISO timestamp for start of range.
+            until: Optional ISO timestamp for end of range.
+            author: Optional GitHub username to filter by.
+
+        Returns:
+            List of commit dicts.
+        """
         params = {"per_page": 100}
         if since:
             params["since"] = since
@@ -70,7 +115,16 @@ class GitHubClient:
         return self._request(f"{self.BASE_URL}/repos/{owner}/{repo}/commits", params)
 
     def get_commit_stats(self, owner, repo, sha):
-        """Lines added/deleted for a single commit."""
+        """Fetch line addition/deletion stats for a single commit.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            sha: The commit SHA.
+
+        Returns:
+            Dict with 'additions' and 'deletions' counts.
+        """
         data = self._request(f"{self.BASE_URL}/repos/{owner}/{repo}/commits/{sha}")
         stats = data.get("stats", {})
         return {
@@ -79,7 +133,17 @@ class GitHubClient:
         }
 
     def get_pull_requests(self, owner, repo, state="all", author=None):
-        """PRs filtered by state, optionally by author (client-side)."""
+        """Fetch pull requests, optionally filtered by author client-side.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            state: PR state filter ('open', 'closed', 'all').
+            author: Optional username for client-side filtering.
+
+        Returns:
+            List of PR dicts.
+        """
         prs = self._request(
             f"{self.BASE_URL}/repos/{owner}/{repo}/pulls",
             params={"per_page": 100, "state": state},
@@ -89,25 +153,61 @@ class GitHubClient:
         return prs
 
     def get_pr_detail(self, owner, repo, pr_number):
-        """Single PR detail — includes additions, deletions, comments count."""
+        """Fetch detailed info for a single PR including additions and deletions.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            pr_number: The PR number.
+
+        Returns:
+            Dict of PR details from the GitHub API.
+        """
         return self._request(
             f"{self.BASE_URL}/repos/{owner}/{repo}/pulls/{pr_number}"
         )
 
     def get_pr_reviews(self, owner, repo, pr_number):
-        """Reviews on a PR."""
+        """Fetch reviews on a pull request.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            pr_number: The PR number.
+
+        Returns:
+            List of review dicts.
+        """
         return self._request(
             f"{self.BASE_URL}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
         )
 
     def get_pr_review_comments(self, owner, repo, pr_number):
-        """Review comments on a PR."""
+        """Fetch inline review comments on a pull request.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            pr_number: The PR number.
+
+        Returns:
+            List of review comment dicts.
+        """
         return self._request(
             f"{self.BASE_URL}/repos/{owner}/{repo}/pulls/{pr_number}/comments"
         )
 
     def get_all_pr_review_comments(self, owner, repo, since=None):
-        """All review comments across all PRs in a repo."""
+        """Fetch all review comments across all PRs in a repository.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            since: Optional ISO timestamp to filter by.
+
+        Returns:
+            List of review comment dicts.
+        """
         params = {"per_page": 100, "sort": "created", "direction": "desc"}
         if since:
             params["since"] = since
@@ -116,7 +216,17 @@ class GitHubClient:
         )
 
     def get_issues(self, owner, repo, creator=None, state="all"):
-        """Issues by creator (excludes PRs)."""
+        """Fetch issues (excluding pull requests) for a repository.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            creator: Optional username to filter by issue creator.
+            state: Issue state filter ('open', 'closed', 'all').
+
+        Returns:
+            List of issue dicts (PRs filtered out).
+        """
         params = {"per_page": 100, "state": state}
         if creator:
             params["creator"] = creator
@@ -124,7 +234,16 @@ class GitHubClient:
         return [i for i in issues if "pull_request" not in i]
 
     def get_issue_comments(self, owner, repo, since=None):
-        """All issue comments, optionally since a timestamp."""
+        """Fetch all issue comments for a repository.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            since: Optional ISO timestamp to filter by.
+
+        Returns:
+            List of comment dicts.
+        """
         params = {"per_page": 100}
         if since:
             params["since"] = since

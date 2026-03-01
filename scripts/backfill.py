@@ -10,10 +10,12 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tracker.config import load_env
-from scripts.daily_fetch import fetch_day, HEADERS
+from tracker.constants import DAILY_HEADERS
+from tracker.writers import write_daily_metrics
 
 
 def main():
+    """Parse date range arguments and backfill daily metrics for each day."""
     parser = argparse.ArgumentParser(description="Backfill historical GitHub activity data")
     parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", default=None, help="End date (YYYY-MM-DD), defaults to today")
@@ -26,7 +28,7 @@ def main():
     ws = sheets.get_worksheet("Daily Raw Metrics")
     existing = ws.row_values(1) if ws.row_count > 0 else []
     if not existing or existing[0] != "Username":
-        ws.update(values=[HEADERS], range_name="A1")
+        ws.update(values=[DAILY_HEADERS], range_name="A1")
 
     start = datetime.strptime(args.start, "%Y-%m-%d")
     end = datetime.strptime(args.end, "%Y-%m-%d") if args.end else datetime.now(timezone.utc)
@@ -35,7 +37,7 @@ def main():
     while current <= end:
         date_str = current.strftime("%Y-%m-%d")
         print(f"\n--- Backfilling {date_str} ---")
-        fetch_day(gh, sheets, ws, learners, base_repos, date_str)
+        write_daily_metrics(gh, sheets, ws, learners, base_repos, date_str)
         current += timedelta(days=1)
 
         if current <= end:

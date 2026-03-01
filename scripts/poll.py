@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""30-minute lightweight poll — fetches commit counts, PRs, issues, comments."""
+"""30-minute lightweight poll.
+
+Fetches commit counts, PRs, issues, and comments since the last poll
+timestamp, writes rows to Daily Raw Metrics, sorts, and updates the
+poll timestamp in Config.
+"""
 
 import os
 import sys
@@ -8,16 +13,12 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tracker.config import load_env
-
-HEADERS = [
-    "Username", "Date", "Commits", "PRs Opened", "PRs Merged",
-    "Issues Opened", "Issue Comments", "PR Review Comments Given",
-    "Lines Added", "Lines Deleted", "PR Avg Merge Time (hrs)",
-    "PR Rejection Rate", "Last Updated",
-]
+from tracker.constants import DAILY_HEADERS
+from tracker.writers import sort_daily_raw_metrics
 
 
 def main():
+    """Run the lightweight poll pipeline."""
     gh, sheets, config, base_repos, learners = load_env()
 
     last_poll = config.get("last_poll_timestamp", "")
@@ -29,12 +30,11 @@ def main():
     ws = sheets.get_worksheet("Daily Raw Metrics")
     existing = ws.row_values(1) if ws.row_count > 0 else []
     if not existing or existing[0] != "Username":
-        ws.update(values=[HEADERS], range_name="A1")
+        ws.update(values=[DAILY_HEADERS], range_name="A1")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Fetch base-repo-level data once
     base_repo_data = {}
     for repo_full in base_repos:
         base_owner, base_repo = repo_full.split("/")
@@ -53,7 +53,6 @@ def main():
             comments = []
         base_repo_data[repo_full] = {"prs": prs, "issues": issues, "comments": comments}
 
-    # Collect all rows
     all_rows = []
     for learner in learners:
         username = learner["username"]
@@ -86,7 +85,6 @@ def main():
         if commit_count > 0 or prs_opened > 0:
             print(f"  {username}: {commit_count} commits, {prs_opened} PRs, {issues_opened} issues")
 
-    # Batch write
     if all_rows:
         existing_data = ws.get_all_values()
         existing_map = {}
@@ -108,19 +106,8 @@ def main():
         ws.batch_update(updates)
         print(f"  Wrote {len(updates)} rows")
 
-    # Sort Daily Raw Metrics: Date DESC, Username ASC
-    print("  Sorting Daily Raw Metrics...")
-    all_sorted = ws.get_all_values()
-    if len(all_sorted) > 1:
-        sort_headers = all_sorted[0]
-        sort_rows = all_sorted[1:]
-        sort_rows.sort(key=lambda r: r[0].lower() if r else "")
-        sort_rows.sort(key=lambda r: r[1] if len(r) > 1 else "", reverse=True)
-        sorted_data = [sort_headers] + sort_rows
-        col = chr(64 + len(sort_headers)) if len(sort_headers) <= 26 else "Z"
-        ws.update(values=sorted_data, range_name=f"A1:{col}{len(sorted_data)}")
+    sort_daily_raw_metrics(ws)
 
-    # Update last poll timestamp
     config_ws = sheets.get_worksheet("Config")
     all_config = config_ws.get_all_values()
     for i, row in enumerate(all_config):
