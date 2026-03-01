@@ -22,7 +22,7 @@ LEADERBOARD_HEADERS = [
     "Collaboration", "Code Volume", "Quality", "Active Days",
     "Total Commits", "PRs Opened", "PRs Merged", "Lines Added",
     "Lines Deleted", "Comments Received", "Comments Given",
-    "Avg Merge Time", "Rejection Rate", "Last Active",
+    "Avg Merge Time", "Rejection Rate", "Last Active", "Last Comment",
 ]
 
 DAILY_VIEW_HEADERS = [
@@ -59,7 +59,7 @@ def fetch_base_repo_data(gh, base_repos, since=None, include_review_comments=Fal
         if include_review_comments:
             print(f"  Fetching all PR review comments for {repo_full}...")
             try:
-                review_comments = gh.get_all_pr_review_comments(base_owner, base_repo)
+                review_comments = gh.get_all_pr_review_comments(base_owner, base_repo, since=since)
             except Exception:
                 review_comments = []
             print(f"    Got {len(review_comments)} review comments")
@@ -154,24 +154,34 @@ def fetch_learner_day(gh, learner, base_repo_data, date_str):
     }
 
 
-def fetch_learner_alltime(gh, learner, base_repo_data):
-    """Fetch all-time aggregated metrics for one learner."""
+def fetch_learner_alltime(gh, learner, base_repo_data, config=None):
+    """Fetch all-time aggregated metrics for one learner (filtered by bootcamp start)."""
     username = learner["username"]
     fork_owner, fork_repo = learner["fork_repo"].split("/")
     base_owner, base_repo = learner["base_repo"].split("/")
 
-    # All commits on fork
+    # Parse bootcamp start date for filtering
+    bootcamp_start_str = (config or {}).get("bootcamp_start_date", "2026-02-23")
     try:
-        all_commits = gh.get_commits(fork_owner, fork_repo, author=username)
+        bootcamp_start = datetime.strptime(bootcamp_start_str, "%Y-%m-%d").date()
+    except ValueError:
+        bootcamp_start = datetime(2026, 2, 23).date()
+    bootcamp_start_iso = f"{bootcamp_start.isoformat()}T00:00:00Z"
+
+    # All commits on fork (since bootcamp start)
+    try:
+        all_commits = gh.get_commits(fork_owner, fork_repo, author=username, since=bootcamp_start_iso)
     except Exception:
         all_commits = []
 
     total_commits = len(all_commits)
 
-    # Count active days (unique dates with commits)
+    # Count active days (unique dates with commits, only >= bootcamp_start)
     active_dates = set()
     for c in all_commits:
-        active_dates.add(c["commit"]["author"]["date"][:10])
+        d = c["commit"]["author"]["date"][:10]
+        if d >= bootcamp_start_str:
+            active_dates.add(d)
 
     # Weekly commits (last 7 days)
     week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT00:00:00Z")
@@ -185,7 +195,12 @@ def fetch_learner_alltime(gh, learner, base_repo_data):
     data = base_repo_data.get(learner["base_repo"], {
         "prs": [], "issues": [], "comments": [], "review_comments": [],
     })
-    user_prs = [p for p in data["prs"] if p["user"]["login"].lower() == username.lower()]
+    # Filter PRs created after bootcamp start
+    user_prs = [
+        p for p in data["prs"]
+        if p["user"]["login"].lower() == username.lower()
+        and p["created_at"][:10] >= bootcamp_start_str
+    ]
 
     prs_opened = len(user_prs)
     prs_merged = len([p for p in user_prs if p.get("merged_at")])
@@ -203,7 +218,9 @@ def fetch_learner_alltime(gh, learner, base_repo_data):
 
     # Also count active days from PR creation dates
     for pr in user_prs:
-        active_dates.add(pr["created_at"][:10])
+        d = pr["created_at"][:10]
+        if d >= bootcamp_start_str:
+            active_dates.add(d)
     active_days = len(active_dates)
 
     # Average merge time across all merged PRs
@@ -221,41 +238,70 @@ def fetch_learner_alltime(gh, learner, base_repo_data):
     rejection_rate = round(len(rejected) / len(closed_prs), 2) if closed_prs else 0
 
     # Comments received on this user's PRs (issue-style + inline review)
+    # Also track last comment on learner's PRs for "Last Comment" column
     comments_received = 0
+    last_comment_text = ""
+    last_comment_date = ""
+
     for pr in user_prs:
         try:
             pr_comments = gh._request(
                 f"{gh.BASE_URL}/repos/{base_owner}/{base_repo}/issues/{pr['number']}/comments"
             )
-            comments_received += len([
-                c for c in pr_comments
-                if c["user"]["login"].lower() != username.lower()
-            ])
+            for c in pr_comments:
+                if c["created_at"][:10] < bootcamp_start_str:
+                    continue
+                if c["user"]["login"].lower() != username.lower():
+                    comments_received += 1
+                # Track latest comment from anyone on this learner's PRs
+                if c["created_at"] > last_comment_date:
+                    last_comment_date = c["created_at"]
+                    last_comment_text = c.get("body", "")
         except Exception:
             pass
 
     all_review_comments = data.get("review_comments", [])
     user_pr_numbers = {pr["number"] for pr in user_prs}
-    comments_received += len([
-        c for c in all_review_comments
-        if c.get("pull_request_url", "").split("/")[-1].isdigit()
-        and int(c["pull_request_url"].split("/")[-1]) in user_pr_numbers
-        and c["user"]["login"].lower() != username.lower()
-    ])
+    for c in all_review_comments:
+        pr_url = c.get("pull_request_url", "")
+        pr_num_str = pr_url.split("/")[-1]
+        if not pr_num_str.isdigit():
+            continue
+        pr_num = int(pr_num_str)
+        if pr_num not in user_pr_numbers:
+            continue
+        if c["created_at"][:10] < bootcamp_start_str:
+            continue
+        if c["user"]["login"].lower() != username.lower():
+            comments_received += 1
+        # Track latest review comment on this learner's PRs
+        if c["created_at"] > last_comment_date:
+            last_comment_date = c["created_at"]
+            last_comment_text = c.get("body", "")
 
-    # Comments given by this user on ANY PR
+    # Truncate last comment to 200 chars
+    if len(last_comment_text) > 200:
+        last_comment_text = last_comment_text[:200] + "..."
+
+    # Comments given by this user on ANY PR (filtered by bootcamp start)
     all_issue_comments = data.get("comments", [])
     comments_given = len([
         c for c in all_issue_comments
         if c["user"]["login"].lower() == username.lower()
+        and c["created_at"][:10] >= bootcamp_start_str
     ])
     comments_given += len([
         c for c in all_review_comments
         if c["user"]["login"].lower() == username.lower()
+        and c["created_at"][:10] >= bootcamp_start_str
     ])
 
-    # Issues opened
-    user_issues = [i for i in data["issues"] if i["user"]["login"].lower() == username.lower()]
+    # Issues opened (filtered by bootcamp start)
+    user_issues = [
+        i for i in data["issues"]
+        if i["user"]["login"].lower() == username.lower()
+        and i["created_at"][:10] >= bootcamp_start_str
+    ]
     issues_opened = len(user_issues)
 
     # Last active date
@@ -275,6 +321,7 @@ def fetch_learner_alltime(gh, learner, base_repo_data):
         "avg_merge_time": avg_merge_time,
         "rejection_rate": rejection_rate,
         "last_active": last_active,
+        "last_comment": last_comment_text,
     }
 
 
@@ -282,24 +329,46 @@ def compute_scores(metrics, config):
     """Compute 4 component scores + total + classification from all-time metrics."""
     m = metrics
 
-    # Read config values with defaults
+    # Read config values with defaults — ALL scoring params are config-driven
     consistency_max = float(config.get("consistency_max_points", 30))
     collaboration_max = float(config.get("collaboration_max_points", 25))
     code_volume_max = float(config.get("code_volume_max_points", 25))
     quality_max = float(config.get("quality_max_points", 20))
+
+    # Consistency sub-weights
+    active_days_weight = float(config.get("consistency_active_days_weight", 20))
+    commits_per_day_weight = float(config.get("consistency_commits_weight", 10))
+
+    # Collaboration per-item points and sub-caps
     pr_pts = float(config.get("pr_points_each", 2))
     review_pts = float(config.get("review_points_each", 1.5))
     issue_pts = float(config.get("issue_points_each", 1))
     comment_pts = float(config.get("comment_points_each", 0.5))
+    collab_pr_cap = float(config.get("collab_pr_cap", 8))
+    collab_review_cap = float(config.get("collab_review_cap", 7))
+    collab_issue_cap = float(config.get("collab_issue_cap", 5))
+    collab_comment_cap = float(config.get("collab_comment_cap", 5))
+
+    # Code volume scales and sub-weights
     lines_added_scale = float(config.get("lines_added_max_scale", 500))
     lines_deleted_scale = float(config.get("lines_deleted_max_scale", 200))
+    code_volume_added_weight = float(config.get("code_volume_added_weight", 15))
+    code_volume_deleted_weight = float(config.get("code_volume_deleted_weight", 10))
+
+    # Quality sub-weights
     merge_rate_max = float(config.get("merge_rate_max_points", 15))
     feedback_max = float(config.get("feedback_max_points", 5))
+    feedback_pts_each = float(config.get("feedback_points_each", 1))
 
-    # Consistency (max 30): active_day_ratio × 20 + commits_per_day × 10 (capped)
+    # Classification thresholds
+    classify_excellent = float(config.get("classify_excellent", 80))
+    classify_good = float(config.get("classify_good", 60))
+    classify_average = float(config.get("classify_average", 40))
+    classify_needs_improvement = float(config.get("classify_needs_improvement", 20))
+
+    # Consistency: active_day_ratio × weight + commits_per_day × weight (capped)
     active_days = m["active_days"]
     total_commits = m["total_commits"]
-    # Use days since bootcamp start as denominator
     bootcamp_start_str = config.get("bootcamp_start_date", "2026-02-23")
     try:
         bootcamp_start = datetime.strptime(bootcamp_start_str, "%Y-%m-%d").date()
@@ -308,36 +377,38 @@ def compute_scores(metrics, config):
     total_days = max((datetime.now(timezone.utc).date() - bootcamp_start).days, 1)
     active_ratio = min(1.0, active_days / total_days)
     commits_per_day = total_commits / total_days
-    consistency = min(consistency_max, round(active_ratio * 20 + min(10, commits_per_day * 10), 1))
+    consistency = min(consistency_max, round(
+        active_ratio * active_days_weight
+        + min(commits_per_day_weight, commits_per_day * commits_per_day_weight), 1))
 
-    # Collaboration (max 25): PRs×2 + reviews×1.5 + issues×1 + comments×0.5 (capped per component)
-    collab_prs = min(8, m["prs_opened"] * pr_pts)
-    collab_reviews = min(7, m["comments_given"] * review_pts)
-    collab_issues = min(5, m["issues_opened"] * issue_pts)
-    collab_comments = min(5, (m["comments_given"] + m["comments_received"]) * comment_pts)
+    # Collaboration: PRs×pts + reviews×pts + issues×pts + comments×pts (each sub-capped)
+    collab_prs = min(collab_pr_cap, m["prs_opened"] * pr_pts)
+    collab_reviews = min(collab_review_cap, m["comments_given"] * review_pts)
+    collab_issues = min(collab_issue_cap, m["issues_opened"] * issue_pts)
+    collab_comments = min(collab_comment_cap, (m["comments_given"] + m["comments_received"]) * comment_pts)
     collaboration = min(collaboration_max, round(collab_prs + collab_reviews + collab_issues + collab_comments, 1))
 
-    # Code Volume (max 25): lines_added/500×15 + lines_deleted/200×10 (capped)
-    added_score = min(15, m["lines_added"] / lines_added_scale * 15)
-    deleted_score = min(10, m["lines_deleted"] / lines_deleted_scale * 10)
+    # Code Volume: lines_added/scale × weight + lines_deleted/scale × weight (each sub-capped)
+    added_score = min(code_volume_added_weight, m["lines_added"] / lines_added_scale * code_volume_added_weight)
+    deleted_score = min(code_volume_deleted_weight, m["lines_deleted"] / lines_deleted_scale * code_volume_deleted_weight)
     code_volume = min(code_volume_max, round(added_score + deleted_score, 1))
 
-    # Quality (max 20): merge_rate×15 + feedback×1 (capped at 5)
+    # Quality: merge_rate × merge_rate_max + feedback × pts_each (capped)
     merge_rate = (m["prs_merged"] / m["prs_opened"]) if m["prs_opened"] > 0 else 0
     quality_merge = min(merge_rate_max, merge_rate * merge_rate_max)
-    quality_feedback = min(feedback_max, m["comments_received"] * 1)
+    quality_feedback = min(feedback_max, m["comments_received"] * feedback_pts_each)
     quality = min(quality_max, round(quality_merge + quality_feedback, 1))
 
     total_score = round(consistency + collaboration + code_volume + quality, 1)
 
-    # Classification
-    if total_score >= 80:
+    # Classification (thresholds from config)
+    if total_score >= classify_excellent:
         classification = "EXCELLENT"
-    elif total_score >= 60:
+    elif total_score >= classify_good:
         classification = "GOOD"
-    elif total_score >= 40:
+    elif total_score >= classify_average:
         classification = "AVERAGE"
-    elif total_score >= 20:
+    elif total_score >= classify_needs_improvement:
         classification = "NEEDS IMPROVEMENT"
     else:
         classification = "AT RISK"
@@ -417,13 +488,23 @@ def sort_daily_raw_metrics(ws):
 def update_leaderboard(gh, sheets, learners, base_repos, config):
     """Fetch all-time data, compute scores, write to Leaderboard tab."""
     print("\nUpdating Leaderboard...")
-    base_repo_data = fetch_base_repo_data(gh, base_repos, include_review_comments=True)
+    # Parse bootcamp start date for filtering
+    bootcamp_start_str = config.get("bootcamp_start_date", "2026-02-23")
+    try:
+        bootcamp_start = datetime.strptime(bootcamp_start_str, "%Y-%m-%d").date()
+    except ValueError:
+        bootcamp_start = datetime(2026, 2, 23).date()
+    bootcamp_start_iso = f"{bootcamp_start.isoformat()}T00:00:00Z"
+
+    base_repo_data = fetch_base_repo_data(
+        gh, base_repos, since=bootcamp_start_iso, include_review_comments=True
+    )
 
     leaderboard_rows = []
     for learner in learners:
         username = learner["username"]
         print(f"  Fetching all-time data for {username}...")
-        m = fetch_learner_alltime(gh, learner, base_repo_data)
+        m = fetch_learner_alltime(gh, learner, base_repo_data, config=config)
         scores = compute_scores(m, config)
 
         # Format merge time
@@ -459,6 +540,7 @@ def update_leaderboard(gh, sheets, learners, base_repos, config):
             "avg_merge_time": merge_time_str,
             "rejection_rate": rejection_str,
             "last_active": m["last_active"],
+            "last_comment": m.get("last_comment", ""),
         })
 
         print(f"    {username}: score={scores['total_score']}, {scores['classification']}")
@@ -475,7 +557,7 @@ def update_leaderboard(gh, sheets, learners, base_repos, config):
             r["active_days"], r["total_commits"], r["prs_opened"], r["prs_merged"],
             r["lines_added"], r["lines_deleted"], r["comments_received"],
             r["comments_given"], r["avg_merge_time"], r["rejection_rate"],
-            r["last_active"],
+            r["last_active"], r["last_comment"],
         ])
 
     lb_ws = sheets.get_worksheet("Leaderboard")
@@ -714,18 +796,36 @@ def ensure_config_defaults(sheets):
         ("at_risk_score_threshold", "30"),
         ("declining_score_threshold", "50"),
         ("declining_active_days_min", "2"),
+        # Consistency scoring
         ("consistency_max_points", "30"),
+        ("consistency_active_days_weight", "20"),
+        ("consistency_commits_weight", "10"),
+        # Collaboration scoring
         ("collaboration_max_points", "25"),
-        ("code_volume_max_points", "25"),
-        ("quality_max_points", "20"),
         ("pr_points_each", "2"),
         ("review_points_each", "1.5"),
         ("issue_points_each", "1"),
         ("comment_points_each", "0.5"),
+        ("collab_pr_cap", "8"),
+        ("collab_review_cap", "7"),
+        ("collab_issue_cap", "5"),
+        ("collab_comment_cap", "5"),
+        # Code volume scoring
+        ("code_volume_max_points", "25"),
         ("lines_added_max_scale", "500"),
         ("lines_deleted_max_scale", "200"),
+        ("code_volume_added_weight", "15"),
+        ("code_volume_deleted_weight", "10"),
+        # Quality scoring
+        ("quality_max_points", "20"),
         ("merge_rate_max_points", "15"),
         ("feedback_max_points", "5"),
+        ("feedback_points_each", "1"),
+        # Classification thresholds
+        ("classify_excellent", "80"),
+        ("classify_good", "60"),
+        ("classify_average", "40"),
+        ("classify_needs_improvement", "20"),
     ]
 
     ws = sheets.get_worksheet("Config")
