@@ -650,19 +650,26 @@ def setup_sheet_structure(sheets):
     print("Setting up sheet structure...")
 
     # Rename Metrics → Roster (if not already done)
-    roster_ws = sheets.rename_worksheet("Metrics", "Roster")
-    if roster_ws:
-        print("  Renamed 'Metrics' → 'Roster'")
-        # Clear stats columns C-N (keep only A=email, B=GitHub account)
-        rows = roster_ws.get_all_values()
-        if rows and len(rows[0]) > 2:
-            # Build range to clear: C1 to last column, all rows
-            last_col = chr(64 + len(rows[0])) if len(rows[0]) <= 26 else "Z"
-            roster_ws.batch_clear([f"C1:{last_col}{len(rows)}"])
-            print("  Cleared columns C-N from Roster tab")
-    else:
-        # Neither Metrics nor Roster exists — ensure Roster tab exists
-        sheets.get_worksheet("Roster")
+    # Check if Roster already exists
+    try:
+        sheets.spreadsheet.worksheet("Roster")
+        print("  Roster tab already exists")
+    except Exception:
+        # Try to rename Metrics → Roster
+        try:
+            metrics_ws = sheets.spreadsheet.worksheet("Metrics")
+            metrics_ws.update_title("Roster")
+            print("  Renamed 'Metrics' → 'Roster'")
+            # Clear stats columns C-N (keep only A=email, B=GitHub account)
+            rows = metrics_ws.get_all_values()
+            if rows and len(rows[0]) > 2:
+                last_col = chr(64 + len(rows[0])) if len(rows[0]) <= 26 else "Z"
+                metrics_ws.batch_clear([f"C1:{last_col}{len(rows)}"])
+                print("  Cleared columns C-N from Roster tab")
+        except Exception:
+            # Neither exists — create Roster
+            sheets.get_worksheet("Roster")
+            print("  Created new Roster tab")
 
     # Ensure all tabs exist (get_worksheet creates if missing)
     sheets.get_worksheet("Leaderboard")
