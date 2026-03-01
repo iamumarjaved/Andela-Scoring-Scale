@@ -188,6 +188,213 @@ def update_leaderboard(gh, sheets, learners, base_repos, config):
     return leaderboard_rows
 
 
+def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_date):
+    """Aggregate Daily Raw Metrics for a date range, score, and write to a leaderboard tab.
+
+    Reads all daily raw data, filters by [start_date, end_date], aggregates
+    per learner, scores using compute_scores(), and writes ranked results
+    to the named tab. Zero extra GitHub API calls.
+
+    Args:
+        sheets: SheetsClient instance.
+        raw_ws: The Daily Raw Metrics worksheet object.
+        config: Config dict from the Config sheet.
+        tab_name: Name of the destination tab (e.g. "Weekly Leaderboard").
+        start_date: Start date string in YYYY-MM-DD format (inclusive).
+        end_date: End date string in YYYY-MM-DD format (inclusive).
+    """
+    print(f"\nWriting {tab_name} ({start_date} to {end_date})...")
+    all_data = raw_ws.get_all_values()
+    if len(all_data) <= 1:
+        print(f"  No data in Daily Raw Metrics for {tab_name}")
+        return
+
+    headers = all_data[0]
+    rows = all_data[1:]
+
+    col_map = {h: i for i, h in enumerate(headers)}
+    username_idx = col_map.get("Username", 0)
+    date_idx = col_map.get("Date", 1)
+    commits_idx = col_map.get("Commits", 2)
+    prs_opened_idx = col_map.get("PRs Opened", 3)
+    prs_merged_idx = col_map.get("PRs Merged", 4)
+    issues_opened_idx = col_map.get("Issues Opened", 5)
+    issue_comments_idx = col_map.get("Issue Comments", 6)
+    review_comments_idx = col_map.get("PR Review Comments Given", 7)
+    lines_added_idx = col_map.get("Lines Added", 8)
+    lines_deleted_idx = col_map.get("Lines Deleted", 9)
+    merge_time_idx = col_map.get("PR Avg Merge Time (hrs)", 10)
+    # rejection_rate_idx not used - we compute from prs_opened/prs_merged
+
+    def safe_num(val):
+        try:
+            return float(val) if val else 0
+        except (ValueError, TypeError):
+            return 0
+
+    def safe_int(val):
+        try:
+            return int(float(val)) if val else 0
+        except (ValueError, TypeError):
+            return 0
+
+    # Aggregate per learner
+    learner_data = {}
+    for row in rows:
+        if len(row) <= date_idx:
+            continue
+        date_str = row[date_idx]
+        if date_str < start_date or date_str > end_date:
+            continue
+        username = row[username_idx]
+
+        if username not in learner_data:
+            learner_data[username] = {
+                "commits": 0, "prs_opened": 0, "prs_merged": 0,
+                "issues_opened": 0, "comments_given": 0,
+                "lines_added": 0, "lines_deleted": 0,
+                "merge_time_weighted_sum": 0, "merge_prs_count": 0,
+                "active_dates": set(), "last_active": "",
+            }
+
+        ld = learner_data[username]
+        commits = safe_int(row[commits_idx] if len(row) > commits_idx else 0)
+        prs_opened = safe_int(row[prs_opened_idx] if len(row) > prs_opened_idx else 0)
+        prs_merged = safe_int(row[prs_merged_idx] if len(row) > prs_merged_idx else 0)
+        issues_opened = safe_int(row[issues_opened_idx] if len(row) > issues_opened_idx else 0)
+        issue_comments = safe_int(row[issue_comments_idx] if len(row) > issue_comments_idx else 0)
+        review_comments = safe_int(row[review_comments_idx] if len(row) > review_comments_idx else 0)
+        lines_added = safe_int(row[lines_added_idx] if len(row) > lines_added_idx else 0)
+        lines_deleted = safe_int(row[lines_deleted_idx] if len(row) > lines_deleted_idx else 0)
+        merge_time = safe_num(row[merge_time_idx] if len(row) > merge_time_idx else 0)
+
+        ld["commits"] += commits
+        ld["prs_opened"] += prs_opened
+        ld["prs_merged"] += prs_merged
+        ld["issues_opened"] += issues_opened
+        ld["comments_given"] += issue_comments + review_comments
+        ld["lines_added"] += lines_added
+        ld["lines_deleted"] += lines_deleted
+
+        if prs_merged > 0 and merge_time > 0:
+            ld["merge_time_weighted_sum"] += merge_time * prs_merged
+            ld["merge_prs_count"] += prs_merged
+
+        has_activity = any([commits, prs_opened, prs_merged, issues_opened,
+                           issue_comments, review_comments, lines_added, lines_deleted])
+        if has_activity:
+            ld["active_dates"].add(date_str)
+            if date_str > ld["last_active"]:
+                ld["last_active"] = date_str
+
+    if not learner_data:
+        print(f"  No learner data found in range for {tab_name}")
+        return
+
+    # Parse dates for scoring
+    try:
+        period_start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        period_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    except ValueError:
+        print(f"  Invalid date range for {tab_name}")
+        return
+
+    # Compute weekly_commits (last 7 days of the period)
+    week_cutoff = (period_end - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    # Build metrics and score each learner
+    period_config = dict(config)
+    period_config["bootcamp_start_date"] = start_date
+
+    leaderboard_rows = []
+    for username, ld in learner_data.items():
+        # weekly_commits: commits from dates in last 7 days of the period
+        weekly_commits = 0
+        for row in rows:
+            if len(row) <= date_idx:
+                continue
+            if row[username_idx] != username:
+                continue
+            date_str = row[date_idx]
+            if date_str >= week_cutoff and date_str <= end_date:
+                weekly_commits += safe_int(row[commits_idx] if len(row) > commits_idx else 0)
+
+        avg_merge_time = (ld["merge_time_weighted_sum"] / ld["merge_prs_count"]
+                          if ld["merge_prs_count"] > 0 else 0)
+        rejection_rate = (1 - (ld["prs_merged"] / ld["prs_opened"])
+                          if ld["prs_opened"] > 0 else 0)
+
+        metrics = {
+            "active_days": len(ld["active_dates"]),
+            "total_commits": ld["commits"],
+            "weekly_commits": weekly_commits,
+            "prs_opened": ld["prs_opened"],
+            "prs_merged": ld["prs_merged"],
+            "issues_opened": ld["issues_opened"],
+            "comments_given": ld["comments_given"],
+            "comments_received": 0,
+            "lines_added": ld["lines_added"],
+            "lines_deleted": ld["lines_deleted"],
+            "avg_merge_time": avg_merge_time,
+            "rejection_rate": rejection_rate,
+            "last_active": ld["last_active"],
+            "last_comment": "",
+        }
+
+        scores = compute_scores(metrics, period_config, end_date=period_end)
+
+        mt = avg_merge_time
+        if mt == 0:
+            merge_time_str = "N/A"
+        elif mt < 1:
+            merge_time_str = f"{round(mt * 60)} min"
+        elif mt < 24:
+            merge_time_str = f"{round(mt, 1)} hrs"
+        else:
+            merge_time_str = f"{round(mt / 24, 1)} days"
+
+        rejection_str = f"{round(rejection_rate * 100)}%"
+
+        leaderboard_rows.append({
+            "username": username,
+            "classification": scores["classification"],
+            "total_score": scores["total_score"],
+            "consistency": scores["consistency"],
+            "collaboration": scores["collaboration"],
+            "code_volume": scores["code_volume"],
+            "quality": scores["quality"],
+            "active_days": len(ld["active_dates"]),
+            "total_commits": ld["commits"],
+            "prs_opened": ld["prs_opened"],
+            "prs_merged": ld["prs_merged"],
+            "lines_added": ld["lines_added"],
+            "lines_deleted": ld["lines_deleted"],
+            "comments_received": 0,
+            "comments_given": ld["comments_given"],
+            "avg_merge_time": merge_time_str,
+            "rejection_rate": rejection_str,
+            "last_active": ld["last_active"],
+            "last_comment": "",
+        })
+
+    leaderboard_rows.sort(key=lambda r: r["total_score"], reverse=True)
+
+    sheet_rows = []
+    for rank, r in enumerate(leaderboard_rows, start=1):
+        sheet_rows.append([
+            rank, r["username"], r["classification"], r["total_score"],
+            r["consistency"], r["collaboration"], r["code_volume"], r["quality"],
+            r["active_days"], r["total_commits"], r["prs_opened"], r["prs_merged"],
+            r["lines_added"], r["lines_deleted"], r["comments_received"],
+            r["comments_given"], r["avg_merge_time"], r["rejection_rate"],
+            r["last_active"], r["last_comment"],
+        ])
+
+    lb_ws = sheets.get_worksheet(tab_name)
+    sheets.clear_and_write(lb_ws, LEADERBOARD_HEADERS, sheet_rows)
+    print(f"  Wrote {len(sheet_rows)} rows to {tab_name}")
+
+
 def write_daily_view(sheets, raw_ws):
     """Build the Daily View tab from the last 14 days of Daily Raw Metrics.
 

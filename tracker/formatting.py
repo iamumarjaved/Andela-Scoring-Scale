@@ -38,12 +38,18 @@ def setup_sheet_structure(sheets):
             print("  Created new Roster tab")
 
     sheets.get_worksheet("Leaderboard")
+    sheets.get_worksheet("Weekly Leaderboard")
+    sheets.get_worksheet("Monthly Leaderboard")
+    sheets.get_worksheet("Custom Leaderboard")
     sheets.get_worksheet("Daily View")
     sheets.get_worksheet("Alerts")
     sheets.get_worksheet("Daily Raw Metrics")
     sheets.get_worksheet("Config")
 
-    desired_order = ["Roster", "Leaderboard", "Daily View", "Alerts", "Daily Raw Metrics", "Config"]
+    desired_order = [
+        "Roster", "Leaderboard", "Weekly Leaderboard", "Monthly Leaderboard",
+        "Custom Leaderboard", "Daily View", "Alerts", "Daily Raw Metrics", "Config",
+    ]
     sheets.reorder_worksheets(desired_order)
     print("  Tabs reordered: " + " | ".join(desired_order))
 
@@ -115,7 +121,10 @@ def format_sheets(sheets):
     if cleanup_requests:
         sp.batch_update({"requests": cleanup_requests})
 
-    tab_names = ["Roster", "Leaderboard", "Daily View", "Alerts", "Daily Raw Metrics", "Config"]
+    tab_names = [
+        "Roster", "Leaderboard", "Weekly Leaderboard", "Monthly Leaderboard",
+        "Custom Leaderboard", "Daily View", "Alerts", "Daily Raw Metrics", "Config",
+    ]
     tabs = {}
     for name in tab_names:
         try:
@@ -126,6 +135,9 @@ def format_sheets(sheets):
     tab_colors = {
         "Roster": "#70AD47",
         "Leaderboard": "#FFD700",
+        "Weekly Leaderboard": "#00B0F0",
+        "Monthly Leaderboard": "#92D050",
+        "Custom Leaderboard": "#FFC000",
         "Daily View": "#4472C4",
         "Alerts": "#FF0000",
         "Daily Raw Metrics": "#808080",
@@ -205,15 +217,20 @@ def format_sheets(sheets):
             }
         })
 
-    if "Leaderboard" in tabs:
-        lb_ws = tabs["Leaderboard"]
-        classification_colors = [
-            ("EXCELLENT", "#C6EFCE"),
-            ("GOOD", "#BDD7EE"),
-            ("AVERAGE", "#FFF2CC"),
-            ("NEEDS IMPROVEMENT", "#FCE4CC"),
-            ("AT RISK", "#FFC7CE"),
-        ]
+    leaderboard_tabs = [
+        "Leaderboard", "Weekly Leaderboard", "Monthly Leaderboard", "Custom Leaderboard",
+    ]
+    classification_colors = [
+        ("EXCELLENT", "#C6EFCE"),
+        ("GOOD", "#BDD7EE"),
+        ("AVERAGE", "#FFF2CC"),
+        ("NEEDS IMPROVEMENT", "#FCE4CC"),
+        ("AT RISK", "#FFC7CE"),
+    ]
+    for lb_name in leaderboard_tabs:
+        if lb_name not in tabs:
+            continue
+        lb_ws = tabs[lb_name]
         for idx, (text, color) in enumerate(classification_colors):
             requests.append({
                 "addConditionalFormatRule": {

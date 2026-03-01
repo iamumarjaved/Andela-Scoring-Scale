@@ -7,7 +7,7 @@ from all-time metrics using config-driven weights, caps, and thresholds.
 from datetime import datetime, timezone
 
 
-def compute_scores(metrics, config):
+def compute_scores(metrics, config, end_date=None):
     """Compute four component scores, total score, and classification.
 
     All scoring parameters (weights, caps, scales, thresholds) are read
@@ -16,6 +16,8 @@ def compute_scores(metrics, config):
     Args:
         metrics: Dict of all-time learner metrics from fetch_learner_alltime.
         config: Dict of config key-value pairs from the Config sheet.
+        end_date: Optional date object. When provided, total_days is computed
+            as end_date - bootcamp_start instead of today - bootcamp_start.
 
     Returns:
         Dict with keys: consistency, collaboration, code_volume, quality,
@@ -61,7 +63,10 @@ def compute_scores(metrics, config):
         bootcamp_start = datetime.strptime(bootcamp_start_str, "%Y-%m-%d").date()
     except ValueError:
         bootcamp_start = datetime(2026, 2, 23).date()
-    total_days = max((datetime.now(timezone.utc).date() - bootcamp_start).days, 1)
+    if end_date:
+        total_days = max((end_date - bootcamp_start).days, 1)
+    else:
+        total_days = max((datetime.now(timezone.utc).date() - bootcamp_start).days, 1)
     active_ratio = min(1.0, active_days / total_days)
     commits_per_day = total_commits / total_days
     consistency = min(consistency_max, round(

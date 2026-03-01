@@ -8,7 +8,7 @@ and formatting. All logic lives in tracker submodules.
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -19,6 +19,7 @@ from tracker.writers import (
     write_daily_metrics,
     sort_daily_raw_metrics,
     update_leaderboard,
+    write_period_leaderboard,
     write_daily_view,
     write_alerts,
 )
@@ -47,6 +48,22 @@ def main():
     sort_daily_raw_metrics(ws)
 
     leaderboard_rows = update_leaderboard(gh, sheets, learners, base_repos, config)
+
+    today_dt = datetime.now(timezone.utc).date()
+
+    # Weekly Leaderboard (last 7 days)
+    week_start = (today_dt - timedelta(days=7)).strftime("%Y-%m-%d")
+    write_period_leaderboard(sheets, ws, config, "Weekly Leaderboard", week_start, today)
+
+    # Monthly Leaderboard (last 30 days)
+    month_start = (today_dt - timedelta(days=30)).strftime("%Y-%m-%d")
+    write_period_leaderboard(sheets, ws, config, "Monthly Leaderboard", month_start, today)
+
+    # Custom Leaderboard (if configured)
+    custom_start = config.get("custom_leaderboard_start", "").strip()
+    custom_end = config.get("custom_leaderboard_end", "").strip()
+    if custom_start and custom_end:
+        write_period_leaderboard(sheets, ws, config, "Custom Leaderboard", custom_start, custom_end)
 
     write_daily_view(sheets, ws)
 

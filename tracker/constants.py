@@ -55,4 +55,6 @@ CONFIG_DEFAULTS = [
     ("classify_good", "60"),
     ("classify_average", "40"),
     ("classify_needs_improvement", "20"),
+    ("custom_leaderboard_start", ""),
+    ("custom_leaderboard_end", ""),
 ]
