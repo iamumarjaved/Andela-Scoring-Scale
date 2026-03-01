@@ -38,15 +38,18 @@ class SheetsClient:
 
     def reorder_worksheets(self, tab_names):
         """Reorder tabs to match the given list. Tabs not in the list stay at the end."""
-        existing = {ws.title: ws for ws in self.spreadsheet.worksheets()}
+        # Refresh to pick up any newly created/renamed worksheets
+        self.spreadsheet.fetch_sheet_metadata()
+        all_ws = self.spreadsheet.worksheets()
+        existing = {ws.title: ws for ws in all_ws}
         ordered = []
         for name in tab_names:
             if name in existing:
-                ordered.append(existing[name])
-        # Append any remaining tabs not in the desired order
-        for ws in self.spreadsheet.worksheets():
-            if ws not in ordered:
-                ordered.append(ws)
+                ordered.append(existing.pop(name))
+        # Append remaining tabs not in the desired order
+        for ws in all_ws:
+            if ws.title in existing:
+                ordered.append(existing.pop(ws.title))
         self.spreadsheet.reorder_worksheets(ordered)
 
     def load_rows(self, worksheet):
