@@ -11,7 +11,7 @@ GitHub API  ──>  Automated Pipeline (GitHub Actions)  ──>  Google Sheets
 The system runs two automated pipelines:
 
 - **Poll Activity** — Runs every 30 minutes. Captures lightweight commit/PR/issue counts for real-time visibility.
-- **Daily Deep Fetch** — Runs once daily at midnight UTC. Performs full analysis: per-commit line stats, merge times, rejection rates, scoring, classification, and alerts.
+- **Daily Deep Fetch** — Runs every 6 hours. Performs full analysis: per-commit line stats, merge times, rejection rates, scoring, classification, and alerts.
 
 All activity is filtered to the bootcamp period (configurable start date, default: Feb 23, 2026). Only post-bootcamp contributions are counted toward scores.
 
@@ -21,6 +21,9 @@ All activity is filtered to the bootcamp period (configurable start date, defaul
 |-----|---------|
 | **Roster** | Enrolled learners (email + GitHub username) |
 | **Leaderboard** | Ranked scores, classifications, all-time metrics, and latest PR feedback |
+| **Weekly Leaderboard** | Last 7 days — scores computed from aggregated daily metrics |
+| **Monthly Leaderboard** | Last 30 days — scores computed from aggregated daily metrics |
+| **Custom Leaderboard** | Custom date range (configured via Config tab) |
 | **Daily View** | Per-day activity breakdown with Activity Scores (last 14 days) |
 | **Alerts** | Flagged learners: INACTIVE, AT RISK, DECLINING |
 | **Daily Raw Metrics** | Granular daily data per learner |
@@ -48,6 +51,16 @@ All scoring weights, caps, and thresholds are fully configurable from the **Conf
 | Below 20 | AT RISK |
 
 All thresholds are configurable in the Config tab.
+
+### Period Leaderboards (Weekly / Monthly / Custom)
+
+Period leaderboards aggregate existing Daily Raw Metrics for the given date range and score them using the same formula — **zero extra GitHub API calls**. They use the same headers and classification as the all-time Leaderboard.
+
+- **Weekly**: Last 7 days
+- **Monthly**: Last 30 days
+- **Custom**: Set `custom_leaderboard_start` and `custom_leaderboard_end` (YYYY-MM-DD) in the Config tab
+
+Note: `comments_received` (comments from others on a learner's PRs) is not available in daily data, so it will be 0 in period views. This affects up to 10 points but relative ranking stays accurate since it applies equally to all learners.
 
 ### Alerts
 
@@ -99,7 +112,7 @@ Two workflows run automatically:
 | Workflow | Schedule | Purpose |
 |----------|----------|---------|
 | **Poll Activity** | Every 30 minutes | Lightweight commit/PR/issue counts |
-| **Daily Deep Fetch** | Midnight UTC | Full scoring, classification, alerts, formatting |
+| **Daily Deep Fetch** | Every 6 hours | Full scoring, classification, alerts, formatting |
 
 Both support manual triggering via the **Actions** tab in GitHub.
 
@@ -128,6 +141,11 @@ scripts/
   backfill.py        # One-time historical data backfill
 tracker/
   config.py          # Environment + config loading
+  constants.py       # Header definitions + config defaults
+  scoring.py         # Score computation (Consistency, Collaboration, Code Volume, Quality)
+  writers.py         # Sheet writers: leaderboard, period leaderboards, daily view, alerts
+  formatting.py      # Tab structure, colors, conditional formatting
+  fetchers.py        # GitHub data fetching (daily + all-time)
   github_client.py   # GitHub API wrapper
   sheets_client.py   # Google Sheets API wrapper
 .github/workflows/
