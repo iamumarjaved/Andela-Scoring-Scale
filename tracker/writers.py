@@ -530,9 +530,11 @@ def write_alerts(sheets, leaderboard_rows, raw_ws, config):
     today = datetime.now(timezone.utc).date()
     inactive_cutoff = (today - timedelta(days=inactive_days)).strftime("%Y-%m-%d")
     week_cutoff = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+    prev_week_cutoff = (today - timedelta(days=14)).strftime("%Y-%m-%d")
 
     user_last_active = {}
-    user_recent_active_days = {}
+    user_this_week_days = {}
+    user_prev_week_days = {}
 
     def safe_num(val):
         """Convert a value to float, returning 0 on failure."""
@@ -555,7 +557,9 @@ def write_alerts(sheets, leaderboard_rows, raw_ws, config):
                 user_last_active[username] = date_str
 
             if date_str >= week_cutoff:
-                user_recent_active_days[username] = user_recent_active_days.get(username, 0) + 1
+                user_this_week_days[username] = user_this_week_days.get(username, 0) + 1
+            elif date_str >= prev_week_cutoff:
+                user_prev_week_days[username] = user_prev_week_days.get(username, 0) + 1
 
     alert_rows = []
     for entry in leaderboard_rows:
@@ -571,11 +575,17 @@ def write_alerts(sheets, leaderboard_rows, raw_ws, config):
         if score < at_risk_threshold:
             alerts.append(("AT RISK", f"Score {score} below {at_risk_threshold}"))
 
-        recent_days = user_recent_active_days.get(username, 0)
-        if score < declining_threshold and recent_days < declining_min_days:
+        this_week = user_this_week_days.get(username, 0)
+        prev_week = user_prev_week_days.get(username, 0)
+
+        if score < declining_threshold and this_week < declining_min_days:
             if not any(a[0] == "INACTIVE" for a in alerts):
-                day_word = "day" if recent_days == 1 else "days"
-                alerts.append(("DECLINING", f"Score {score} (below {declining_threshold}), only {recent_days} active {day_word} in last 7 days"))
+                day_word = "day" if this_week == 1 else "days"
+                alerts.append(("DECLINING", f"Score {score} (below {declining_threshold}), only {this_week} active {day_word} in last 7 days"))
+
+        if this_week > prev_week and this_week >= 2:
+            if not any(a[0] == "INACTIVE" for a in alerts):
+                alerts.append(("IMPROVING", f"{this_week} active days this week vs {prev_week} last week"))
 
         for alert_type, details in alerts:
             alert_rows.append([

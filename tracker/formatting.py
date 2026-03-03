@@ -301,6 +301,7 @@ def format_sheets(sheets):
             ("INACTIVE", "#FFC7CE"),
             ("AT RISK", "#FCE4CC"),
             ("DECLINING", "#FFF2CC"),
+            ("IMPROVING", "#C6EFCE"),
         ]
         for idx, (text, color) in enumerate(alert_colors):
             requests.append({

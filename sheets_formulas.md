@@ -101,7 +101,7 @@ Flagged learners who may need attention. Updated daily.
 | Col | Header | Description |
 |-----|--------|-------------|
 | A | Learner | GitHub username |
-| B | Alert Type | INACTIVE / AT RISK / DECLINING |
+| B | Alert Type | INACTIVE / AT RISK / DECLINING / IMPROVING |
 | C | Details | Human-readable explanation |
 | D | Last Active | Most recent active date |
 | E | Score | Current total score |
@@ -113,8 +113,9 @@ Flagged learners who may need attention. Updated daily.
 | **INACTIVE** | No activity in N+ days | `inactive_threshold_days` (default: 7) |
 | **AT RISK** | Total score below threshold | `at_risk_score_threshold` (default: 30) |
 | **DECLINING** | Score below threshold AND fewer than N active days in last 7 | `declining_score_threshold` (default: 50), `declining_active_days_min` (default: 2) |
+| **IMPROVING** | More active days this week than last week, with at least 2 active days this week | *(no config keys — automatic)* |
 
-**Conditional formatting:** INACTIVE = Red, AT RISK = Orange, DECLINING = Yellow.
+**Conditional formatting:** INACTIVE = Red, AT RISK = Orange, DECLINING = Yellow, IMPROVING = Green.
 
 ---
 

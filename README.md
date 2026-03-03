@@ -69,6 +69,7 @@ Note: `comments_received` (comments from others on a learner's PRs) is not avail
 | **INACTIVE** | No activity in 7+ days (configurable) |
 | **AT RISK** | Total score below 30 (configurable) |
 | **DECLINING** | Score below 50 with fewer than 2 active days in the last week (configurable) |
+| **IMPROVING** | More active days this week than last week (minimum 2 days this week) |
 
 For detailed scoring formulas, column definitions, and all configuration keys, see [`sheets_formulas.md`](sheets_formulas.md).
 
