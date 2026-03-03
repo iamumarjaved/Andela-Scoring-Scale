@@ -24,6 +24,11 @@ ALERTS_HEADERS = [
     "Learner", "Alert Type", "Details", "Last Active", "Score",
 ]
 
+SUMMARY_HEADERS = [
+    "Rank", "Learner", "Classification", "Total Score",
+    "Consistency", "Collaboration", "Code Volume", "Quality",
+]
+
 CONFIG_DEFAULTS = [
     ("bootcamp_start_date", "2026-02-23"),
     ("inactive_threshold_days", "7"),
@@ -45,4 +50,5 @@ CONFIG_DEFAULTS = [
     ("classify_needs_improvement", "20"),
     ("custom_leaderboard_start", ""),
     ("custom_leaderboard_end", ""),
+    ("external_sheet_id", ""),
 ]

@@ -24,6 +24,7 @@ class SheetsClient:
             credentials_info: Google service account credentials dict.
             sheet_id: The Google Sheets spreadsheet ID.
         """
+        self.service_account_email = credentials_info.get("client_email", "")
         creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
         self.gc = gspread.authorize(creds)
         self.spreadsheet = self.gc.open_by_key(sheet_id)

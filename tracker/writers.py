@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from tracker.constants import (
     DAILY_HEADERS,
     LEADERBOARD_HEADERS,
+    SUMMARY_HEADERS,
     DAILY_VIEW_HEADERS,
     ALERTS_HEADERS,
 )
@@ -595,3 +596,164 @@ def write_alerts(sheets, leaderboard_rows, raw_ws, config):
     alerts_ws = sheets.get_worksheet("Alerts")
     sheets.clear_and_write(alerts_ws, ALERTS_HEADERS, alert_rows)
     print(f"  Wrote {len(alert_rows)} alerts")
+
+
+def write_summary(sheets, leaderboard_rows):
+    """Write a simplified score-only view to the Summary tab.
+
+    Extracts just the rank, learner, classification, and four score
+    columns from the leaderboard data.
+
+    Args:
+        sheets: SheetsClient instance.
+        leaderboard_rows: List of leaderboard row dicts from update_leaderboard.
+    """
+    print("\nWriting Summary...")
+    sheet_rows = []
+    for rank, r in enumerate(leaderboard_rows, start=1):
+        sheet_rows.append([
+            rank, r["username"], r["classification"], r["total_score"],
+            r["consistency"], r["collaboration"], r["code_volume"], r["quality"],
+        ])
+
+    summary_ws = sheets.get_worksheet("Summary")
+    sheets.clear_and_write(summary_ws, SUMMARY_HEADERS, sheet_rows)
+    print(f"  Wrote {len(sheet_rows)} rows to Summary")
+
+
+def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
+    """Write scoring data to an external Google Sheet.
+
+    Writes two tabs on the external sheet:
+    - General Metrics Data: detailed raw metrics per learner (from row 3)
+    - Summarized Metrics for Reporting: scores summary per learner (from row 3)
+
+    Preserves rows 1-2 (title + headers) on both tabs.
+
+    Args:
+        sheets: SheetsClient instance.
+        leaderboard_rows: List of leaderboard row dicts from update_leaderboard.
+        raw_ws: The Daily Raw Metrics worksheet object.
+        config: Config dict from the Config sheet.
+    """
+    external_id = config.get("external_sheet_id", "").strip()
+    if not external_id:
+        print("\nNo external_sheet_id configured, skipping external sheet write")
+        return
+
+    print("\nWriting to external sheet...")
+
+    try:
+        ext_sp = sheets.gc.open_by_key(external_id)
+    except Exception as e:
+        print(f"  ERROR: Could not open external sheet: {e}")
+        return
+
+    # Read email→username mapping from Roster tab (col A = email, col B = GitHub)
+    email_map = {}
+    try:
+        roster_ws = sheets.spreadsheet.worksheet("Roster")
+        roster_rows = roster_ws.get_all_values()
+        for row in roster_rows[2:]:
+            if len(row) >= 2 and row[1].strip():
+                username = row[1].strip().rstrip("/").split("/")[-1].lower()
+                email = row[0].strip() if row[0].strip() else ""
+                email_map[username] = email
+    except Exception:
+        print("  WARNING: Could not read Roster tab for email mapping")
+
+    # Compute weekly commits and total issues from raw daily metrics
+    all_data = raw_ws.get_all_values()
+    raw_headers = all_data[0] if all_data else []
+    raw_rows = all_data[1:] if len(all_data) > 1 else []
+
+    col_map = {h: i for i, h in enumerate(raw_headers)}
+    username_idx = col_map.get("Username", 0)
+    date_idx = col_map.get("Date", 1)
+    commits_idx = col_map.get("Commits", 2)
+    issues_idx = col_map.get("Issues Opened", 5)
+
+    today = datetime.now(timezone.utc).date()
+    week_cutoff = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    weekly_commits = {}
+    total_issues = {}
+
+    def safe_int(val):
+        try:
+            return int(float(val)) if val else 0
+        except (ValueError, TypeError):
+            return 0
+
+    for row in raw_rows:
+        if len(row) <= date_idx:
+            continue
+        uname_lower = row[username_idx].lower()
+        date_str = row[date_idx]
+
+        total_issues[uname_lower] = total_issues.get(uname_lower, 0) + safe_int(
+            row[issues_idx] if len(row) > issues_idx else 0
+        )
+
+        if date_str >= week_cutoff:
+            weekly_commits[uname_lower] = weekly_commits.get(uname_lower, 0) + safe_int(
+                row[commits_idx] if len(row) > commits_idx else 0
+            )
+
+    # --- Tab 1: General Metrics Data ---
+    general_rows = []
+    for r in leaderboard_rows:
+        uname = r["username"]
+        email = email_map.get(uname.lower(), "")
+        issues = total_issues.get(uname.lower(), 0)
+        repo_contributions = r["prs_opened"] + issues
+
+        general_rows.append([
+            email, uname, r["total_commits"],
+            weekly_commits.get(uname.lower(), 0),
+            r["active_days"], repo_contributions,
+            r["lines_added"], r["lines_deleted"],
+            r["prs_opened"], r["prs_merged"],
+            r["comments_received"], r["comments_given"],
+            r["avg_merge_time"], r["rejection_rate"],
+        ])
+
+    # --- Tab 2: Summarized Metrics for Reporting ---
+    summary_rows = []
+    for r in leaderboard_rows:
+        uname = r["username"]
+        email = email_map.get(uname.lower(), "")
+        issues = total_issues.get(uname.lower(), 0)
+        repo_contributions = r["prs_opened"] + issues
+
+        summary_rows.append([
+            email, uname,
+            r["consistency"], r["collaboration"],
+            r["code_volume"], repo_contributions,
+            r["quality"],
+        ])
+
+    # Write to external sheet, preserving rows 1-2 (title + headers)
+    try:
+        gen_ws = ext_sp.worksheet("General Metrics Data")
+        if gen_ws.row_count > 2:
+            col_letter = chr(64 + min(gen_ws.col_count, 26))
+            gen_ws.batch_clear([f"A3:{col_letter}{gen_ws.row_count}"])
+        if general_rows:
+            col_letter = chr(64 + len(general_rows[0]))
+            gen_ws.update(values=general_rows, range_name=f"A3:{col_letter}{2 + len(general_rows)}")
+        print(f"  Wrote {len(general_rows)} rows to General Metrics Data")
+    except Exception as e:
+        print(f"  ERROR writing General Metrics Data: {e}")
+
+    try:
+        sum_ws = ext_sp.worksheet("Summarized Metrics for Reporting")
+        if sum_ws.row_count > 2:
+            col_letter = chr(64 + min(sum_ws.col_count, 26))
+            sum_ws.batch_clear([f"A3:{col_letter}{sum_ws.row_count}"])
+        if summary_rows:
+            col_letter = chr(64 + len(summary_rows[0]))
+            sum_ws.update(values=summary_rows, range_name=f"A3:{col_letter}{2 + len(summary_rows)}")
+        print(f"  Wrote {len(summary_rows)} rows to Summarized Metrics for Reporting")
+    except Exception as e:
+        print(f"  ERROR writing Summarized Metrics for Reporting: {e}")

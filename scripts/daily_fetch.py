@@ -14,14 +14,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tracker.config import load_env
 from tracker.constants import DAILY_HEADERS
-from tracker.formatting import setup_sheet_structure, ensure_config_defaults, format_sheets
+from tracker.formatting import setup_sheet_structure, ensure_config_defaults, format_sheets, protect_sheets
 from tracker.writers import (
     write_daily_metrics,
     sort_daily_raw_metrics,
     update_leaderboard,
     write_period_leaderboard,
+    write_summary,
     write_daily_view,
     write_alerts,
+    write_external_sheet,
 )
 
 fetch_day = write_daily_metrics
@@ -67,9 +69,14 @@ def main():
 
     write_daily_view(sheets, ws)
 
+    write_summary(sheets, leaderboard_rows)
+
     write_alerts(sheets, leaderboard_rows, ws, config)
 
+    write_external_sheet(sheets, leaderboard_rows, ws, config)
+
     format_sheets(sheets)
+    protect_sheets(sheets)
 
     print("\nDaily fetch complete.")
 

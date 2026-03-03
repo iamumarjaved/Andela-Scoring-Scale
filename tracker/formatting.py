@@ -37,6 +37,7 @@ def setup_sheet_structure(sheets):
             sheets.get_worksheet("Roster")
             print("  Created new Roster tab")
 
+    sheets.get_worksheet("Summary")
     sheets.get_worksheet("Leaderboard")
     sheets.get_worksheet("Weekly Leaderboard")
     sheets.get_worksheet("Monthly Leaderboard")
@@ -47,7 +48,7 @@ def setup_sheet_structure(sheets):
     sheets.get_worksheet("Config")
 
     desired_order = [
-        "Roster", "Leaderboard", "Weekly Leaderboard", "Monthly Leaderboard",
+        "Summary", "Roster", "Leaderboard", "Weekly Leaderboard", "Monthly Leaderboard",
         "Custom Leaderboard", "Daily View", "Alerts", "Daily Raw Metrics", "Config",
     ]
     sheets.reorder_worksheets(desired_order)
@@ -122,7 +123,7 @@ def format_sheets(sheets):
         sp.batch_update({"requests": cleanup_requests})
 
     tab_names = [
-        "Roster", "Leaderboard", "Weekly Leaderboard", "Monthly Leaderboard",
+        "Summary", "Roster", "Leaderboard", "Weekly Leaderboard", "Monthly Leaderboard",
         "Custom Leaderboard", "Daily View", "Alerts", "Daily Raw Metrics", "Config",
     ]
     tabs = {}
@@ -133,6 +134,7 @@ def format_sheets(sheets):
             pass
 
     tab_colors = {
+        "Summary": "#4472C4",
         "Roster": "#70AD47",
         "Leaderboard": "#FFD700",
         "Weekly Leaderboard": "#00B0F0",
@@ -218,7 +220,7 @@ def format_sheets(sheets):
         })
 
     leaderboard_tabs = [
-        "Leaderboard", "Weekly Leaderboard", "Monthly Leaderboard", "Custom Leaderboard",
+        "Summary", "Leaderboard", "Weekly Leaderboard", "Monthly Leaderboard", "Custom Leaderboard",
     ]
     classification_colors = [
         ("EXCELLENT", "#C6EFCE"),
@@ -328,3 +330,50 @@ def format_sheets(sheets):
         sp.batch_update({"requests": requests})
 
     print("  Formatting applied to all tabs")
+
+
+def protect_sheets(sheets):
+    """Protect all tabs so only the service account can edit.
+
+    Adds a protected range covering each entire sheet. Only the service
+    account email is listed as an editor, so all other users are locked
+    out from editing in the UI. API writes from the service account are
+    not affected.
+
+    Args:
+        sheets: SheetsClient instance (must have service_account_email set).
+    """
+    print("\nProtecting sheets...")
+    sp = sheets.spreadsheet
+    editor_email = sheets.service_account_email
+    if not editor_email:
+        print("  No service account email found, skipping protection")
+        return
+
+    metadata = sp.fetch_sheet_metadata()
+    existing_protected = set()
+    for sheet_data in metadata.get("sheets", []):
+        for pr in sheet_data.get("protectedRanges", []):
+            existing_protected.add(pr["range"]["sheetId"])
+
+    requests = []
+    all_ws = sp.worksheets()
+    for ws in all_ws:
+        if ws.id in existing_protected:
+            continue
+        requests.append({
+            "addProtectedRange": {
+                "protectedRange": {
+                    "range": {"sheetId": ws.id},
+                    "description": "Locked by scoring system",
+                    "warningOnly": False,
+                    "editors": {"users": [editor_email]},
+                }
+            }
+        })
+
+    if requests:
+        sp.batch_update({"requests": requests})
+        print(f"  Protected {len(requests)} tabs (editor: {editor_email})")
+    else:
+        print("  All tabs already protected")
