@@ -354,7 +354,9 @@ def protect_sheets(sheets):
     existing_protected = set()
     for sheet_data in metadata.get("sheets", []):
         for pr in sheet_data.get("protectedRanges", []):
-            existing_protected.add(pr["range"]["sheetId"])
+            sid = pr.get("range", {}).get("sheetId")
+            if sid is not None:
+                existing_protected.add(sid)
 
     requests = []
     all_ws = sp.worksheets()
