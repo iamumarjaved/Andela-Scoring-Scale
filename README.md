@@ -35,10 +35,10 @@ All scoring weights, caps, and thresholds are fully configurable from the **Conf
 
 | Component | Default Max | What It Measures |
 |-----------|-------------|------------------|
-| **Consistency** | 30 | How regularly the learner contributes (active day ratio + commit frequency) |
-| **Collaboration** | 25 | Community engagement (PRs opened, review comments, issues, discussions) |
-| **Code Volume** | 25 | Amount of code contributed (lines added + deleted across PRs) |
-| **Quality** | 20 | Code acceptance rate (PR merge rate + feedback received from reviewers) |
+| **Consistency** | 30 | Daily PR submission rate (PR active days / total days) |
+| **Collaboration** | 25 | PRs opened + code reviews given |
+| **Code Volume** | 25 | Lines of code added across PRs |
+| **Quality** | 20 | PR merge rate (accepted / opened) |
 
 ### Classification
 

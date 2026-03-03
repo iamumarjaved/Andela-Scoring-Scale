@@ -254,7 +254,8 @@ def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_d
                 "issues_opened": 0, "comments_given": 0,
                 "lines_added": 0, "lines_deleted": 0,
                 "merge_time_weighted_sum": 0, "merge_prs_count": 0,
-                "active_dates": set(), "last_active": "",
+                "active_dates": set(), "pr_active_dates": set(),
+                "last_active": "",
             }
 
         ld = learner_data[username]
@@ -279,6 +280,9 @@ def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_d
         if prs_merged > 0 and merge_time > 0:
             ld["merge_time_weighted_sum"] += merge_time * prs_merged
             ld["merge_prs_count"] += prs_merged
+
+        if prs_opened > 0:
+            ld["pr_active_dates"].add(date_str)
 
         has_activity = any([commits, prs_opened, prs_merged, issues_opened,
                            issue_comments, review_comments, lines_added, lines_deleted])
@@ -326,6 +330,7 @@ def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_d
 
         metrics = {
             "active_days": len(ld["active_dates"]),
+            "pr_active_days": len(ld["pr_active_dates"]),
             "total_commits": ld["commits"],
             "weekly_commits": weekly_commits,
             "prs_opened": ld["prs_opened"],

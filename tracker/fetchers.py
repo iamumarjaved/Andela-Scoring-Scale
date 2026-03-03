@@ -210,6 +210,10 @@ def fetch_learner_alltime(gh, learner, base_repo_data, config=None):
     prs_opened = len(user_prs)
     prs_merged = len([p for p in user_prs if p.get("merged_at")])
 
+    pr_active_dates = set()
+    for pr in user_prs:
+        pr_active_dates.add(pr["created_at"][:10])
+
     total_added = 0
     total_deleted = 0
     for pr in user_prs:
@@ -304,6 +308,7 @@ def fetch_learner_alltime(gh, learner, base_repo_data, config=None):
         "total_commits": total_commits,
         "weekly_commits": weekly_commit_count,
         "active_days": active_days,
+        "pr_active_days": len(pr_active_dates),
         "lines_added": total_added,
         "lines_deleted": total_deleted,
         "prs_opened": prs_opened,

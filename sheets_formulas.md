@@ -169,18 +169,14 @@ All scoring parameters, thresholds, and operational settings. **Admins can edit 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `consistency_max_points` | `30` | Maximum points for Consistency component |
-| `consistency_active_days_weight` | `20` | Points allocated to active day ratio |
-| `consistency_commits_weight` | `10` | Points allocated to commits-per-day rate |
+
+Scores based on daily PR submission rate. Full marks for opening PRs every day; marks are proportionally reduced for gaps.
 
 **Formula:**
 ```
-active_ratio     = min(1.0, active_days / days_since_bootcamp_start)
-commits_per_day  = total_commits / days_since_bootcamp_start
+pr_active_ratio = min(1.0, pr_active_days / days_since_bootcamp_start)
 
-Consistency = min(consistency_max_points,
-    active_ratio * consistency_active_days_weight
-  + min(consistency_commits_weight, commits_per_day * consistency_commits_weight)
-)
+Consistency = min(consistency_max_points, pr_active_ratio * consistency_max_points)
 ```
 
 ### Collaboration Scoring (default max: 25 points)
@@ -189,22 +185,16 @@ Consistency = min(consistency_max_points,
 |-----|---------|-------------|
 | `collaboration_max_points` | `25` | Maximum points for Collaboration component |
 | `pr_points_each` | `2` | Points per PR opened |
-| `review_points_each` | `1.5` | Points per review comment given |
-| `issue_points_each` | `1` | Points per issue opened |
-| `comment_points_each` | `0.5` | Points per comment (given + received) |
-| `collab_pr_cap` | `8` | Max points from PRs |
-| `collab_review_cap` | `7` | Max points from review comments |
-| `collab_issue_cap` | `5` | Max points from issues |
-| `collab_comment_cap` | `5` | Max points from comments |
+| `review_points_each` | `1.5` | Points per code review comment given |
+| `collab_pr_cap` | `15` | Max points from PRs |
+| `collab_review_cap` | `10` | Max points from code reviews |
 
 **Formula:**
 ```
-collab_prs      = min(collab_pr_cap,      prs_opened * pr_points_each)
-collab_reviews  = min(collab_review_cap,   comments_given * review_points_each)
-collab_issues   = min(collab_issue_cap,    issues_opened * issue_points_each)
-collab_comments = min(collab_comment_cap,  (comments_given + comments_received) * comment_points_each)
+collab_prs     = min(collab_pr_cap,     prs_opened * pr_points_each)
+collab_reviews = min(collab_review_cap, comments_given * review_points_each)
 
-Collaboration = min(collaboration_max_points, sum of above)
+Collaboration = min(collaboration_max_points, collab_prs + collab_reviews)
 ```
 
 ### Code Volume Scoring (default max: 25 points)
@@ -212,17 +202,11 @@ Collaboration = min(collaboration_max_points, sum of above)
 | Key | Default | Description |
 |-----|---------|-------------|
 | `code_volume_max_points` | `25` | Maximum points for Code Volume component |
-| `lines_added_max_scale` | `500` | Lines added needed for max sub-score |
-| `lines_deleted_max_scale` | `200` | Lines deleted needed for max sub-score |
-| `code_volume_added_weight` | `15` | Max points from lines added |
-| `code_volume_deleted_weight` | `10` | Max points from lines deleted |
+| `lines_added_max_scale` | `500` | Lines added needed for max score |
 
 **Formula:**
 ```
-added_score   = min(code_volume_added_weight,   lines_added / lines_added_max_scale * code_volume_added_weight)
-deleted_score = min(code_volume_deleted_weight,  lines_deleted / lines_deleted_max_scale * code_volume_deleted_weight)
-
-Code Volume = min(code_volume_max_points, added_score + deleted_score)
+Code Volume = min(code_volume_max_points, lines_added / lines_added_max_scale * code_volume_max_points)
 ```
 
 ### Quality Scoring (default max: 20 points)
@@ -230,17 +214,14 @@ Code Volume = min(code_volume_max_points, added_score + deleted_score)
 | Key | Default | Description |
 |-----|---------|-------------|
 | `quality_max_points` | `20` | Maximum points for Quality component |
-| `merge_rate_max_points` | `15` | Max points from PR merge rate |
-| `feedback_max_points` | `5` | Max points from feedback received |
-| `feedback_points_each` | `1` | Points per comment received on learner's PRs |
+
+Scores based purely on PR merge rate (accepted / opened).
 
 **Formula:**
 ```
-merge_rate       = prs_merged / prs_opened  (0 if no PRs)
-quality_merge    = min(merge_rate_max_points, merge_rate * merge_rate_max_points)
-quality_feedback = min(feedback_max_points, comments_received * feedback_points_each)
+merge_rate = prs_merged / prs_opened  (0 if no PRs)
 
-Quality = min(quality_max_points, quality_merge + quality_feedback)
+Quality = min(quality_max_points, merge_rate * quality_max_points)
 ```
 
 ### Classification Thresholds
@@ -266,7 +247,7 @@ Total Score = Consistency + Collaboration + Code Volume + Quality  (max 100)
 Applied automatically on every run:
 
 - **All tabs**: Frozen header row, navy background with white bold text, auto-filters, auto-resized columns
-- **Tab colors**: Roster (green), Leaderboard (gold), Daily View (blue), Alerts (red), Daily Raw Metrics (grey), Config (purple)
-- **Leaderboard**: Classification column color-coded (EXCELLENT=green, GOOD=blue, AVERAGE=yellow, NEEDS IMPROVEMENT=orange, AT RISK=red). Rank column bold + centered.
+- **Tab colors**: Roster (green), Leaderboard (gold), Weekly Leaderboard (light blue), Monthly Leaderboard (lime), Custom Leaderboard (amber), Daily View (blue), Alerts (red), Daily Raw Metrics (grey), Config (purple)
+- **All Leaderboards**: Classification column color-coded (EXCELLENT=green, GOOD=blue, AVERAGE=yellow, NEEDS IMPROVEMENT=orange, AT RISK=red). Rank column bold + centered.
 - **Daily View**: Activity Score column color-coded by value range
 - **Alerts**: Alert Type column color-coded by severity
