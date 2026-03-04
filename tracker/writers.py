@@ -730,7 +730,7 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
             email, uname,
             r["consistency"], r["collaboration"],
             r["code_volume"], repo_contributions,
-            r["quality"],
+            r["quality"], r["total_score"],
         ])
 
     # Headers for both tabs (accurate to our scoring model)
@@ -745,7 +745,7 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
         "Learner's Email", "GitHub Account",
         "Consistency (PR Active Days)", "Collaboration (PRs + Reviews)",
         "Code Volume (Lines Added)", "Repo Contributions",
-        "Quality Signals (PR Merge Rate)",
+        "Quality Signals (PR Merge Rate)", "Total Score",
     ]
 
     # Write to external sheet — row 1 preserved (title), row 2 = headers, row 3+ = data
