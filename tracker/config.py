@@ -1,8 +1,11 @@
 """Shared config loading for all scripts.
 
 Reads environment variables for GitHub and Google Sheets credentials,
-initializes API clients, loads the Config tab, and resolves learners
-from the Roster tab by matching GitHub usernames to repository forks.
+initializes API clients, loads the Config tab, and resolves learners.
+
+When an external_sheet_id is configured, learners are read from the
+external sheet's "General Metrics Data" tab (column B = GitHub accounts,
+starting row 3). Otherwise falls back to the Roster tab.
 """
 
 import json
@@ -23,6 +26,86 @@ def _parse_username_from_url(url):
         The extracted username string.
     """
     return url.strip().rstrip("/").split("/")[-1]
+
+
+def _resolve_forks(usernames, gh, base_repos):
+    """Look up fork repos for a list of GitHub usernames.
+
+    Args:
+        usernames: List of GitHub username strings.
+        gh: GitHubClient instance.
+        base_repos: List of "owner/repo" strings to search for forks.
+
+    Returns:
+        List of learner dicts with keys: username, fork_repo, base_repo.
+    """
+    fork_map = {}
+    for repo_full in base_repos:
+        owner, repo = repo_full.split("/")
+        forks = gh.get_forks(owner, repo)
+        for f in forks:
+            fork_map[f["owner"]["login"].lower()] = {
+                "full_name": f["full_name"],
+                "base_repo": repo_full,
+            }
+
+    learners = []
+    for username in usernames:
+        fork_info = fork_map.get(username.lower())
+        if fork_info:
+            learners.append({
+                "username": username,
+                "fork_repo": fork_info["full_name"],
+                "base_repo": fork_info["base_repo"],
+            })
+        else:
+            learners.append({
+                "username": username,
+                "fork_repo": f"{username}/llm_engineering",
+                "base_repo": base_repos[0],
+            })
+
+    return learners
+
+
+def _load_learners_from_external(sheets, gh, base_repos, config):
+    """Read GitHub accounts from the external sheet's General Metrics Data tab.
+
+    Column B (index 1) contains GitHub account usernames, starting from
+    row 3 (rows 1-2 are title and headers).
+
+    Args:
+        sheets: SheetsClient instance.
+        gh: GitHubClient instance.
+        base_repos: List of "owner/repo" strings to search for forks.
+        config: Config dict (must contain external_sheet_id).
+
+    Returns:
+        List of learner dicts, or None if external sheet is not configured
+        or cannot be read.
+    """
+    external_id = config.get("external_sheet_id", "").strip()
+    if not external_id:
+        return None
+
+    try:
+        ext_sp = sheets.gc.open_by_key(external_id)
+        gen_ws = ext_sp.worksheet("General Metrics Data")
+        rows = gen_ws.get_all_values()
+    except Exception as e:
+        print(f"  WARNING: Could not read external sheet for learner list: {e}")
+        return None
+
+    usernames = []
+    for row in rows[2:]:
+        if len(row) >= 2 and row[1].strip():
+            usernames.append(_parse_username_from_url(row[1]))
+
+    if not usernames:
+        return None
+
+    print(f"  Loaded {len(usernames)} learners from external sheet")
+    return _resolve_forks(usernames, gh, base_repos)
 
 
 def _load_learners_from_roster(sheets, gh, base_repos):
@@ -59,33 +142,7 @@ def _load_learners_from_roster(sheets, gh, base_repos):
     if not usernames:
         return []
 
-    fork_map = {}
-    for repo_full in base_repos:
-        owner, repo = repo_full.split("/")
-        forks = gh.get_forks(owner, repo)
-        for f in forks:
-            fork_map[f["owner"]["login"].lower()] = {
-                "full_name": f["full_name"],
-                "base_repo": repo_full,
-            }
-
-    learners = []
-    for username in usernames:
-        fork_info = fork_map.get(username.lower())
-        if fork_info:
-            learners.append({
-                "username": username,
-                "fork_repo": fork_info["full_name"],
-                "base_repo": fork_info["base_repo"],
-            })
-        else:
-            learners.append({
-                "username": username,
-                "fork_repo": f"{username}/llm_engineering",
-                "base_repo": base_repos[0],
-            })
-
-    return learners
+    return _resolve_forks(usernames, gh, base_repos)
 
 
 def load_env():
@@ -93,8 +150,10 @@ def load_env():
 
     Reads GH_TRACKING_PAT, GOOGLE_SHEETS_CREDS, and GOOGLE_SHEET_ID
     from environment variables, builds a GitHubClient and SheetsClient,
-    reads the Config tab for runtime settings, and resolves learners
-    from the Roster tab.
+    reads the Config tab for runtime settings, and resolves learners.
+
+    When external_sheet_id is configured, learners are loaded from the
+    external sheet's General Metrics Data tab. Falls back to Roster tab.
 
     Returns:
         Tuple of (GitHubClient, SheetsClient, config dict, base_repos list,
@@ -111,6 +170,8 @@ def load_env():
     config = sheets.read_config()
     base_repos = [r.strip() for r in config.get("base_repos", "ed-donner/llm_engineering").split(",")]
 
-    learners = _load_learners_from_roster(sheets, gh, base_repos)
+    learners = _load_learners_from_external(sheets, gh, base_repos, config)
+    if learners is None:
+        learners = _load_learners_from_roster(sheets, gh, base_repos)
 
     return gh, sheets, config, base_repos, learners

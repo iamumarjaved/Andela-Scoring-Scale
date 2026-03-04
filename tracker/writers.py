@@ -649,18 +649,18 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
         print(f"  ERROR: Could not open external sheet: {e}")
         return
 
-    # Read email→username mapping from Roster tab (col A = email, col B = GitHub)
+    # Read email→username mapping from the external sheet itself (col A = email, col B = GitHub)
     email_map = {}
     try:
-        roster_ws = sheets.spreadsheet.worksheet("Roster")
-        roster_rows = roster_ws.get_all_values()
-        for row in roster_rows[2:]:
+        gen_ws_read = ext_sp.worksheet("General Metrics Data")
+        ext_rows = gen_ws_read.get_all_values()
+        for row in ext_rows[2:]:
             if len(row) >= 2 and row[1].strip():
                 username = row[1].strip().rstrip("/").split("/")[-1].lower()
                 email = row[0].strip() if row[0].strip() else ""
                 email_map[username] = email
     except Exception:
-        print("  WARNING: Could not read Roster tab for email mapping")
+        print("  WARNING: Could not read external sheet for email mapping")
 
     # Compute weekly commits and total issues from raw daily metrics
     all_data = raw_ws.get_all_values()
@@ -733,12 +733,29 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
             r["quality"],
         ])
 
-    # Write to external sheet, preserving rows 1-2 (title + headers)
+    # Headers for both tabs (accurate to our scoring model)
+    general_headers = [
+        "Learner's Email", "GitHub Account", "Total Daily Commits",
+        "Total Weekly Commits", "Active Days", "Repo Contributions",
+        "Lines Added", "Lines Deleted", "PRs Opened", "PRs Merged",
+        "PR Review Comments Received", "PR Review Comments Given",
+        "Average PR Merge Time", "PR Rejection Rate",
+    ]
+    summary_headers = [
+        "Learner's Email", "GitHub Account",
+        "Consistency (PR Active Days)", "Collaboration (PRs + Reviews)",
+        "Code Volume (Lines Added)", "Repo Contributions",
+        "Quality Signals (PR Merge Rate)",
+    ]
+
+    # Write to external sheet — row 1 preserved (title), row 2 = headers, row 3+ = data
     try:
         gen_ws = ext_sp.worksheet("General Metrics Data")
         if gen_ws.row_count > 2:
             col_letter = chr(64 + min(gen_ws.col_count, 26))
-            gen_ws.batch_clear([f"A3:{col_letter}{gen_ws.row_count}"])
+            gen_ws.batch_clear([f"A2:{col_letter}{gen_ws.row_count}"])
+        col_letter = chr(64 + len(general_headers))
+        gen_ws.update(values=[general_headers], range_name=f"A2:{col_letter}2")
         if general_rows:
             col_letter = chr(64 + len(general_rows[0]))
             gen_ws.update(values=general_rows, range_name=f"A3:{col_letter}{2 + len(general_rows)}")
@@ -750,7 +767,9 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
         sum_ws = ext_sp.worksheet("Summarized Metrics for Reporting")
         if sum_ws.row_count > 2:
             col_letter = chr(64 + min(sum_ws.col_count, 26))
-            sum_ws.batch_clear([f"A3:{col_letter}{sum_ws.row_count}"])
+            sum_ws.batch_clear([f"A2:{col_letter}{sum_ws.row_count}"])
+        col_letter = chr(64 + len(summary_headers))
+        sum_ws.update(values=[summary_headers], range_name=f"A2:{col_letter}2")
         if summary_rows:
             col_letter = chr(64 + len(summary_rows[0]))
             sum_ws.update(values=summary_rows, range_name=f"A3:{col_letter}{2 + len(summary_rows)}")
