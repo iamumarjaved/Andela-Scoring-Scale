@@ -12,6 +12,8 @@ from tracker.constants import (
     SUMMARY_HEADERS,
     DAILY_VIEW_HEADERS,
     ALERTS_HEADERS,
+    EXTERNAL_GROUP_TABS,
+    EXTERNAL_GROUP_HEADERS,
 )
 from tracker.fetchers import fetch_base_repo_data, fetch_learner_day, fetch_learner_alltime
 from tracker.scoring import compute_scores
@@ -624,11 +626,12 @@ def write_summary(sheets, leaderboard_rows):
 def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
     """Write scoring data to an external Google Sheet.
 
-    Writes two tabs on the external sheet:
-    - General Metrics Data: detailed raw metrics per learner (from row 3)
-    - Summarized Metrics for Reporting: scores summary per learner (from row 3)
+    For each group tab (Igniters, Euclid, etc.): normalizes columns to
+    Name | Email | GitHub Username | metrics, preserving rows without
+    GitHub usernames (empty metrics).
 
-    Preserves rows 1-2 (title + headers) on both tabs.
+    For overall tabs: writes all learners to General Metrics Data (row 3+)
+    and Summarized Metrics for Reporting (row 3+), preserving row 1 titles.
 
     Args:
         sheets: SheetsClient instance.
@@ -636,6 +639,8 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
         raw_ws: The Daily Raw Metrics worksheet object.
         config: Config dict from the Config sheet.
     """
+    from tracker.config import detect_group_columns
+
     external_id = config.get("external_sheet_id", "").strip()
     if not external_id:
         print("\nNo external_sheet_id configured, skipping external sheet write")
@@ -649,18 +654,10 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
         print(f"  ERROR: Could not open external sheet: {e}")
         return
 
-    # Read email→username mapping from the external sheet itself (col A = email, col B = GitHub)
-    email_map = {}
-    try:
-        gen_ws_read = ext_sp.worksheet("General Metrics Data")
-        ext_rows = gen_ws_read.get_all_values()
-        for row in ext_rows[2:]:
-            if len(row) >= 2 and row[1].strip():
-                username = row[1].strip().rstrip("/").split("/")[-1].lower()
-                email = row[0].strip() if row[0].strip() else ""
-                email_map[username] = email
-    except Exception:
-        print("  WARNING: Could not read external sheet for email mapping")
+    # Build metrics lookup from leaderboard_rows
+    metrics_lookup = {}
+    for r in leaderboard_rows:
+        metrics_lookup[r["username"].lower()] = r
 
     # Compute weekly commits and total issues from raw daily metrics
     all_data = raw_ws.get_all_values()
@@ -668,10 +665,10 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
     raw_rows = all_data[1:] if len(all_data) > 1 else []
 
     col_map = {h: i for i, h in enumerate(raw_headers)}
-    username_idx = col_map.get("Username", 0)
-    date_idx = col_map.get("Date", 1)
-    commits_idx = col_map.get("Commits", 2)
-    issues_idx = col_map.get("Issues Opened", 5)
+    r_username_idx = col_map.get("Username", 0)
+    r_date_idx = col_map.get("Date", 1)
+    r_commits_idx = col_map.get("Commits", 2)
+    r_issues_idx = col_map.get("Issues Opened", 5)
 
     today = datetime.now(timezone.utc).date()
     week_cutoff = (today - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -686,54 +683,75 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
             return 0
 
     for row in raw_rows:
-        if len(row) <= date_idx:
+        if len(row) <= r_date_idx:
             continue
-        uname_lower = row[username_idx].lower()
-        date_str = row[date_idx]
+        uname_lower = row[r_username_idx].lower()
+        date_str = row[r_date_idx]
 
         total_issues[uname_lower] = total_issues.get(uname_lower, 0) + safe_int(
-            row[issues_idx] if len(row) > issues_idx else 0
+            row[r_issues_idx] if len(row) > r_issues_idx else 0
         )
-
         if date_str >= week_cutoff:
             weekly_commits[uname_lower] = weekly_commits.get(uname_lower, 0) + safe_int(
-                row[commits_idx] if len(row) > commits_idx else 0
+                row[r_commits_idx] if len(row) > r_commits_idx else 0
             )
 
-    # --- Tab 1: General Metrics Data ---
-    general_rows = []
-    for r in leaderboard_rows:
-        uname = r["username"]
-        email = email_map.get(uname.lower(), "")
-        issues = total_issues.get(uname.lower(), 0)
-        repo_contributions = r["prs_opened"] + issues
+    def _metrics_row(m, uname_lower):
+        """Build the 12 metric columns for a learner with data."""
+        issues = total_issues.get(uname_lower, 0)
+        return [
+            m["total_commits"], weekly_commits.get(uname_lower, 0),
+            m["active_days"], m["prs_opened"] + issues,
+            m["lines_added"], m["lines_deleted"],
+            m["prs_opened"], m["prs_merged"],
+            m["comments_received"], m["comments_given"],
+            m["avg_merge_time"], m["rejection_rate"],
+        ]
 
-        general_rows.append([
-            email, uname, r["total_commits"],
-            weekly_commits.get(uname.lower(), 0),
-            r["active_days"], repo_contributions,
-            r["lines_added"], r["lines_deleted"],
-            r["prs_opened"], r["prs_merged"],
-            r["comments_received"], r["comments_given"],
-            r["avg_merge_time"], r["rejection_rate"],
-        ])
+    EMPTY_METRICS = [""] * 12
 
-    # --- Tab 2: Summarized Metrics for Reporting ---
-    summary_rows = []
-    for r in leaderboard_rows:
-        uname = r["username"]
-        email = email_map.get(uname.lower(), "")
-        issues = total_issues.get(uname.lower(), 0)
-        repo_contributions = r["prs_opened"] + issues
+    # Collect email+name maps from group tabs for overall sheets
+    email_map = {}
+    name_map = {}
 
-        summary_rows.append([
-            email, uname,
-            r["consistency"], r["collaboration"],
-            r["code_volume"], repo_contributions,
-            r["quality"], r["total_score"],
-        ])
+    # --- Write per-group tabs (normalized) ---
+    for tab_name in EXTERNAL_GROUP_TABS:
+        try:
+            ws = ext_sp.worksheet(tab_name)
+            rows = ws.get_all_values()
+            if not rows:
+                continue
 
-    # Headers for both tabs (accurate to our scoring model)
+            email_idx, name_idx, github_idx = detect_group_columns(rows[0])
+
+            group_data = []
+            for row in rows[1:]:
+                if not any(cell.strip() for cell in row):
+                    continue
+
+                name = row[name_idx].strip() if name_idx is not None and len(row) > name_idx else ""
+                email = row[email_idx].strip() if email_idx is not None and len(row) > email_idx else ""
+                github_raw = row[github_idx].strip() if github_idx is not None and len(row) > github_idx else ""
+                github_username = github_raw.strip().rstrip("/").split("/")[-1] if github_raw else ""
+                uname_lower = github_username.lower() if github_username else ""
+
+                if uname_lower:
+                    email_map[uname_lower] = email
+                    name_map[uname_lower] = name
+
+                m = metrics_lookup.get(uname_lower) if uname_lower else None
+                metrics = _metrics_row(m, uname_lower) if m else EMPTY_METRICS
+                group_data.append([name, email, github_username] + metrics)
+
+            ws.clear()
+            all_rows = [EXTERNAL_GROUP_HEADERS] + group_data
+            col_letter = chr(64 + len(EXTERNAL_GROUP_HEADERS))
+            ws.update(values=all_rows, range_name=f"A1:{col_letter}{len(all_rows)}")
+            print(f"  Wrote {len(group_data)} rows to {tab_name}")
+        except Exception as e:
+            print(f"  ERROR writing {tab_name}: {e}")
+
+    # --- Write General Metrics Data (all learners, row 3+) ---
     general_headers = [
         "Learner's Email", "GitHub Account", "Total Daily Commits",
         "Total Weekly Commits", "Active Days", "Repo Contributions",
@@ -741,14 +759,13 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
         "PR Review Comments Received", "PR Review Comments Given",
         "Average PR Merge Time", "PR Rejection Rate",
     ]
-    summary_headers = [
-        "Learner's Email", "GitHub Account",
-        "Consistency (PR Active Days)", "Collaboration (PRs + Reviews)",
-        "Code Volume (Lines Added)", "Repo Contributions",
-        "Quality Signals (PR Merge Rate)", "Total Score",
-    ]
 
-    # Write to external sheet — row 1 preserved (title), row 2 = headers, row 3+ = data
+    general_rows = []
+    for r in leaderboard_rows:
+        uname_lower = r["username"].lower()
+        email = email_map.get(uname_lower, "")
+        general_rows.append([email, r["username"]] + _metrics_row(r, uname_lower))
+
     try:
         gen_ws = ext_sp.worksheet("General Metrics Data")
         if gen_ws.row_count > 2:
@@ -762,6 +779,26 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
         print(f"  Wrote {len(general_rows)} rows to General Metrics Data")
     except Exception as e:
         print(f"  ERROR writing General Metrics Data: {e}")
+
+    # --- Write Summarized Metrics for Reporting (all learners, row 3+) ---
+    summary_headers = [
+        "Learner's Email", "GitHub Account",
+        "Consistency (PR Active Days)", "Collaboration (PRs + Reviews)",
+        "Code Volume (Lines Added)", "Repo Contributions",
+        "Quality Signals (PR Merge Rate)", "Total Score",
+    ]
+
+    summary_rows = []
+    for r in leaderboard_rows:
+        uname_lower = r["username"].lower()
+        email = email_map.get(uname_lower, "")
+        issues = total_issues.get(uname_lower, 0)
+        summary_rows.append([
+            email, r["username"],
+            r["consistency"], r["collaboration"],
+            r["code_volume"], r["prs_opened"] + issues,
+            r["quality"], r["total_score"],
+        ])
 
     try:
         sum_ws = ext_sp.worksheet("Summarized Metrics for Reporting")

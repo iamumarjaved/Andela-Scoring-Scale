@@ -29,6 +29,18 @@ SUMMARY_HEADERS = [
     "Consistency", "Collaboration", "Code Volume", "Quality",
 ]
 
+EXTERNAL_GROUP_TABS = [
+    "Igniters", "Euclid", "AI Alchemist", "Neural-Forge", "Wakanda", "Frontiers",
+]
+
+EXTERNAL_GROUP_HEADERS = [
+    "Name", "Email", "GitHub Username",
+    "Total Daily Commits", "Total Weekly Commits", "Active Days",
+    "Repo Contributions", "Lines Added", "Lines Deleted",
+    "PRs Opened", "PRs Merged", "PR Review Comments Received",
+    "PR Review Comments Given", "Average PR Merge Time", "PR Rejection Rate",
+]
+
 CONFIG_DEFAULTS = [
     ("bootcamp_start_date", "2026-02-23"),
     ("inactive_threshold_days", "7"),

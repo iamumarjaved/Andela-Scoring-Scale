@@ -12,8 +12,43 @@ import json
 import os
 import base64
 
+from tracker.constants import EXTERNAL_GROUP_TABS
 from tracker.github_client import GitHubClient
 from tracker.sheets_client import SheetsClient
+
+
+def detect_group_columns(headers):
+    """Detect email, name, and GitHub username column indices from headers.
+
+    Handles various column layouts across group tabs by matching header
+    text keywords. Prefers 'username' columns over 'link' columns.
+
+    Args:
+        headers: List of header strings from row 1 of a group tab.
+
+    Returns:
+        Tuple of (email_idx, name_idx, github_idx). Any may be None.
+    """
+    email_idx = name_idx = github_idx = github_link_idx = None
+    for i, h in enumerate(headers):
+        hl = h.lower().strip()
+        if not hl:
+            continue
+        if "email" in hl:
+            email_idx = i
+        elif "username" in hl:
+            github_idx = i
+        elif "github" in hl:
+            if "link" in hl:
+                github_link_idx = i
+            elif github_idx is None:
+                github_idx = i
+        elif "name" in hl:
+            if name_idx is None:
+                name_idx = i
+    if github_idx is None:
+        github_idx = github_link_idx
+    return email_idx, name_idx, github_idx
 
 
 def _parse_username_from_url(url):
@@ -69,10 +104,11 @@ def _resolve_forks(usernames, gh, base_repos):
 
 
 def _load_learners_from_external(sheets, gh, base_repos, config):
-    """Read GitHub accounts from the external sheet's General Metrics Data tab.
+    """Read GitHub accounts from group tabs in the external sheet.
 
-    Column B (index 1) contains GitHub account usernames, starting from
-    row 3 (rows 1-2 are title and headers).
+    Iterates over all group tabs (Igniters, Euclid, etc.), auto-detects
+    the GitHub column from headers, and parses usernames from URLs or
+    plain text. Deduplicates across groups.
 
     Args:
         sheets: SheetsClient instance.
@@ -90,22 +126,41 @@ def _load_learners_from_external(sheets, gh, base_repos, config):
 
     try:
         ext_sp = sheets.gc.open_by_key(external_id)
-        gen_ws = ext_sp.worksheet("General Metrics Data")
-        rows = gen_ws.get_all_values()
     except Exception as e:
-        print(f"  WARNING: Could not read external sheet for learner list: {e}")
+        print(f"  WARNING: Could not open external sheet: {e}")
         return None
 
     usernames = []
-    for row in rows[2:]:
-        if len(row) >= 2 and row[1].strip():
-            usernames.append(_parse_username_from_url(row[1]))
+    for tab_name in EXTERNAL_GROUP_TABS:
+        try:
+            ws = ext_sp.worksheet(tab_name)
+            rows = ws.get_all_values()
+            if not rows:
+                continue
+            _, _, github_idx = detect_group_columns(rows[0])
+            if github_idx is None:
+                print(f"  WARNING: No GitHub column found in {tab_name}")
+                continue
+            for row in rows[1:]:
+                if len(row) > github_idx and row[github_idx].strip():
+                    username = _parse_username_from_url(row[github_idx])
+                    if username:
+                        usernames.append(username)
+        except Exception as e:
+            print(f"  WARNING: Could not read tab {tab_name}: {e}")
 
     if not usernames:
         return None
 
-    print(f"  Loaded {len(usernames)} learners from external sheet")
-    return _resolve_forks(usernames, gh, base_repos)
+    seen = set()
+    unique = []
+    for u in usernames:
+        if u.lower() not in seen:
+            seen.add(u.lower())
+            unique.append(u)
+
+    print(f"  Loaded {len(unique)} learners from {len(EXTERNAL_GROUP_TABS)} group tabs")
+    return _resolve_forks(unique, gh, base_repos)
 
 
 def _load_learners_from_roster(sheets, gh, base_repos):
