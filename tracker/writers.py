@@ -14,6 +14,7 @@ from tracker.constants import (
     ALERTS_HEADERS,
     EXTERNAL_GROUP_TABS,
     EXTERNAL_GROUP_HEADERS,
+    EXTERNAL_PERIOD_HEADERS,
 )
 from tracker.fetchers import fetch_base_repo_data, fetch_learner_day, fetch_learner_alltime
 from tracker.scoring import compute_scores
@@ -296,7 +297,7 @@ def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_d
 
     if not learner_data:
         print(f"  No learner data found in range for {tab_name}")
-        return
+        return []
 
     # Parse dates for scoring
     try:
@@ -401,6 +402,8 @@ def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_d
     lb_ws = sheets.get_worksheet(tab_name)
     sheets.clear_and_write(lb_ws, LEADERBOARD_HEADERS, sheet_rows)
     print(f"  Wrote {len(sheet_rows)} rows to {tab_name}")
+
+    return leaderboard_rows
 
 
 def write_daily_view(sheets, raw_ws):
@@ -623,21 +626,23 @@ def write_summary(sheets, leaderboard_rows):
     print(f"  Wrote {len(sheet_rows)} rows to Summary")
 
 
-def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
+def write_external_sheet(sheets, leaderboard_rows, raw_ws, config,
+                         weekly_rows=None, monthly_rows=None):
     """Write scoring data to an external Google Sheet.
 
-    For each group tab (Igniters, Euclid, etc.): normalizes columns to
-    Name | Email | GitHub Username | metrics, preserving rows without
-    GitHub usernames (empty metrics).
+    For each group tab: normalizes to Name | Email | GitHub Username |
+    metrics | scores, preserving rows without GitHub usernames.
 
-    For overall tabs: writes all learners to General Metrics Data (row 3+)
-    and Summarized Metrics for Reporting (row 3+), preserving row 1 titles.
+    For overall tabs: writes all learners to General Metrics Data,
+    Summarized Metrics, Weekly Leaderboard, and Monthly Leaderboard.
 
     Args:
         sheets: SheetsClient instance.
         leaderboard_rows: List of leaderboard row dicts from update_leaderboard.
         raw_ws: The Daily Raw Metrics worksheet object.
         config: Config dict from the Config sheet.
+        weekly_rows: Period leaderboard rows for the current week (Mon-Sun).
+        monthly_rows: Period leaderboard rows for the current month.
     """
     from tracker.config import detect_group_columns
 
@@ -708,13 +713,19 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
             m["avg_merge_time"], m["rejection_rate"],
         ]
 
+    def _score_row(m):
+        """Build the 5 score columns."""
+        return [m["consistency"], m["collaboration"], m["code_volume"],
+                m["quality"], m["total_score"]]
+
     EMPTY_METRICS = [""] * 12
+    EMPTY_SCORES = [""] * 5
 
     # Collect email+name maps from group tabs for overall sheets
     email_map = {}
     name_map = {}
 
-    # --- Write per-group tabs (normalized) ---
+    # --- Write per-group tabs (normalized with scores) ---
     for tab_name in EXTERNAL_GROUP_TABS:
         try:
             ws = ext_sp.worksheet(tab_name)
@@ -741,7 +752,8 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
 
                 m = metrics_lookup.get(uname_lower) if uname_lower else None
                 metrics = _metrics_row(m, uname_lower) if m else EMPTY_METRICS
-                group_data.append([name, email, github_username] + metrics)
+                scores = _score_row(m) if m else EMPTY_SCORES
+                group_data.append([name, email, github_username] + metrics + scores)
 
             ws.clear()
             all_rows = [EXTERNAL_GROUP_HEADERS] + group_data
@@ -813,3 +825,32 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config):
         print(f"  Wrote {len(summary_rows)} rows to Summarized Metrics for Reporting")
     except Exception as e:
         print(f"  ERROR writing Summarized Metrics for Reporting: {e}")
+
+    # --- Write Weekly and Monthly Leaderboards ---
+    def _write_ext_period(tab_title, period_rows):
+        if not period_rows:
+            return
+        data = []
+        for rank, r in enumerate(period_rows, start=1):
+            uname_lower = r["username"].lower()
+            data.append([
+                rank, name_map.get(uname_lower, ""),
+                email_map.get(uname_lower, ""), r["username"],
+                r["total_score"], r["consistency"], r["collaboration"],
+                r["code_volume"], r["quality"],
+            ])
+        try:
+            try:
+                pw = ext_sp.worksheet(tab_title)
+            except Exception:
+                pw = ext_sp.add_worksheet(title=tab_title, rows=200, cols=len(EXTERNAL_PERIOD_HEADERS))
+            pw.clear()
+            all_rows = [EXTERNAL_PERIOD_HEADERS] + data
+            col_letter = chr(64 + len(EXTERNAL_PERIOD_HEADERS))
+            pw.update(values=all_rows, range_name=f"A1:{col_letter}{len(all_rows)}")
+            print(f"  Wrote {len(data)} rows to {tab_title}")
+        except Exception as e:
+            print(f"  ERROR writing {tab_title}: {e}")
+
+    _write_ext_period("Weekly Leaderboard", weekly_rows)
+    _write_ext_period("Monthly Leaderboard", monthly_rows)

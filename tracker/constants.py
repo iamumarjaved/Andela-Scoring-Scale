@@ -39,6 +39,12 @@ EXTERNAL_GROUP_HEADERS = [
     "Repo Contributions", "Lines Added", "Lines Deleted",
     "PRs Opened", "PRs Merged", "PR Review Comments Received",
     "PR Review Comments Given", "Average PR Merge Time", "PR Rejection Rate",
+    "Consistency", "Collaboration", "Code Volume", "Quality", "Total Score",
+]
+
+EXTERNAL_PERIOD_HEADERS = [
+    "Rank", "Name", "Email", "GitHub Username", "Total Score",
+    "Consistency", "Collaboration", "Code Volume", "Quality",
 ]
 
 CONFIG_DEFAULTS = [

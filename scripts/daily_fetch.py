@@ -53,13 +53,14 @@ def main():
 
     today_dt = datetime.now(timezone.utc).date()
 
-    # Weekly Leaderboard (last 7 days)
-    week_start = (today_dt - timedelta(days=7)).strftime("%Y-%m-%d")
-    write_period_leaderboard(sheets, ws, config, "Weekly Leaderboard", week_start, today)
+    # Weekly Leaderboard (Monday to today of current week)
+    monday = today_dt - timedelta(days=today_dt.weekday())
+    week_start = monday.strftime("%Y-%m-%d")
+    weekly_rows = write_period_leaderboard(sheets, ws, config, "Weekly Leaderboard", week_start, today)
 
-    # Monthly Leaderboard (last 30 days)
-    month_start = (today_dt - timedelta(days=30)).strftime("%Y-%m-%d")
-    write_period_leaderboard(sheets, ws, config, "Monthly Leaderboard", month_start, today)
+    # Monthly Leaderboard (1st of current month to today)
+    month_start = today_dt.replace(day=1).strftime("%Y-%m-%d")
+    monthly_rows = write_period_leaderboard(sheets, ws, config, "Monthly Leaderboard", month_start, today)
 
     # Custom Leaderboard (if configured)
     custom_start = config.get("custom_leaderboard_start", "").strip()
@@ -73,7 +74,8 @@ def main():
 
     write_alerts(sheets, leaderboard_rows, ws, config)
 
-    write_external_sheet(sheets, leaderboard_rows, ws, config)
+    write_external_sheet(sheets, leaderboard_rows, ws, config,
+                         weekly_rows=weekly_rows, monthly_rows=monthly_rows)
 
     format_sheets(sheets)
     protect_sheets(sheets)
