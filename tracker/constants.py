@@ -43,7 +43,7 @@ EXTERNAL_GROUP_HEADERS = [
 ]
 
 EXTERNAL_PERIOD_HEADERS = [
-    "Rank", "Name", "Email", "GitHub Username", "Total Score",
+    "Name", "Email", "GitHub Username", "Total Score",
     "Consistency", "Collaboration", "Code Volume", "Quality",
 ]
 

@@ -831,10 +831,10 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config,
         if not period_rows:
             return
         data = []
-        for rank, r in enumerate(period_rows, start=1):
+        for r in period_rows:
             uname_lower = r["username"].lower()
             data.append([
-                rank, name_map.get(uname_lower, ""),
+                name_map.get(uname_lower, ""),
                 email_map.get(uname_lower, ""), r["username"],
                 r["total_score"], r["consistency"], r["collaboration"],
                 r["code_volume"], r["quality"],
