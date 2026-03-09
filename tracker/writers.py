@@ -71,6 +71,9 @@ def write_daily_metrics(gh, sheets, ws, learners, base_repos, date_str):
                 next_row += 1
             updates.append({"range": f"A{r}:M{r}", "values": [row_data]})
 
+        if next_row - 1 > ws.row_count:
+            ws.add_rows(next_row - 1 - ws.row_count)
+
         ws.batch_update(updates)
         print(f"  Wrote {len(updates)} rows to Daily Raw Metrics")
 
