@@ -44,14 +44,21 @@ def write_daily_metrics(gh, sheets, ws, learners, base_repos, date_str):
     for learner in learners:
         m = fetch_learner_day(gh, learner, base_repo_data, date_str)
 
+        has_activity = any([
+            m["commits"], m["prs_opened"], m["prs_merged"], m["issues_opened"],
+            m["issue_comments"], m["review_comments_given"],
+            m["lines_added"], m["lines_deleted"],
+        ])
+        if not has_activity:
+            continue
+
         all_row_data.append([
             learner["username"], date_str, m["commits"], m["prs_opened"], m["prs_merged"],
             m["issues_opened"], m["issue_comments"], m["review_comments_given"],
             m["lines_added"], m["lines_deleted"], m["avg_merge_time"], m["rejection_rate"], now,
         ])
 
-        if m["commits"] > 0 or m["prs_opened"] > 0:
-            print(f"  {learner['username']} ({date_str}): {m['commits']} commits, +{m['lines_added']}/-{m['lines_deleted']}, {m['prs_opened']} PRs")
+        print(f"  {learner['username']} ({date_str}): {m['commits']} commits, +{m['lines_added']}/-{m['lines_deleted']}, {m['prs_opened']} PRs")
 
     if all_row_data:
         existing_data = ws.get_all_values()
@@ -297,6 +304,9 @@ def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_d
             ld["active_dates"].add(date_str)
             if date_str > ld["last_active"]:
                 ld["last_active"] = date_str
+
+    # Filter out learners with no actual activity in the period
+    learner_data = {k: v for k, v in learner_data.items() if v["active_dates"]}
 
     if not learner_data:
         print(f"  No learner data found in range for {tab_name}")
