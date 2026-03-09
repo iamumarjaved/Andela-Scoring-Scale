@@ -56,17 +56,17 @@ def main():
     # Weekly Leaderboard (Monday to today of current week)
     monday = today_dt - timedelta(days=today_dt.weekday())
     week_start = monday.strftime("%Y-%m-%d")
-    weekly_rows = write_period_leaderboard(sheets, ws, config, "Weekly Leaderboard", week_start, today)
+    weekly_rows = write_period_leaderboard(sheets, ws, config, "Weekly Leaderboard", week_start, today, learners=learners)
 
     # Monthly Leaderboard (1st of current month to today)
     month_start = today_dt.replace(day=1).strftime("%Y-%m-%d")
-    monthly_rows = write_period_leaderboard(sheets, ws, config, "Monthly Leaderboard", month_start, today)
+    monthly_rows = write_period_leaderboard(sheets, ws, config, "Monthly Leaderboard", month_start, today, learners=learners)
 
     # Custom Leaderboard (if configured)
     custom_start = config.get("custom_leaderboard_start", "").strip()
     custom_end = config.get("custom_leaderboard_end", "").strip()
     if custom_start and custom_end:
-        write_period_leaderboard(sheets, ws, config, "Custom Leaderboard", custom_start, custom_end)
+        write_period_leaderboard(sheets, ws, config, "Custom Leaderboard", custom_start, custom_end, learners=learners)
 
     write_daily_view(sheets, ws)
 

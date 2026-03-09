@@ -202,7 +202,7 @@ def update_leaderboard(gh, sheets, learners, base_repos, config):
     return leaderboard_rows
 
 
-def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_date):
+def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_date, learners=None):
     """Aggregate Daily Raw Metrics for a date range, score, and write to a leaderboard tab.
 
     Reads all daily raw data, filters by [start_date, end_date], aggregates
@@ -216,6 +216,8 @@ def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_d
         tab_name: Name of the destination tab (e.g. "Weekly Leaderboard").
         start_date: Start date string in YYYY-MM-DD format (inclusive).
         end_date: End date string in YYYY-MM-DD format (inclusive).
+        learners: Optional list of learner dicts. When provided, all learners
+            appear in the leaderboard (those without activity get 0 scores).
     """
     print(f"\nWriting {tab_name} ({start_date} to {end_date})...")
     all_data = raw_ws.get_all_values()
@@ -305,8 +307,19 @@ def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_d
             if date_str > ld["last_active"]:
                 ld["last_active"] = date_str
 
-    # Filter out learners with no actual activity in the period
-    learner_data = {k: v for k, v in learner_data.items() if v["active_dates"]}
+    # Ensure all learners appear in the leaderboard
+    if learners:
+        for learner in learners:
+            uname = learner["username"]
+            if uname not in learner_data:
+                learner_data[uname] = {
+                    "commits": 0, "prs_opened": 0, "prs_merged": 0,
+                    "issues_opened": 0, "comments_given": 0,
+                    "lines_added": 0, "lines_deleted": 0,
+                    "merge_time_weighted_sum": 0, "merge_prs_count": 0,
+                    "active_dates": set(), "pr_active_dates": set(),
+                    "last_active": "",
+                }
 
     if not learner_data:
         print(f"  No learner data found in range for {tab_name}")
