@@ -175,6 +175,10 @@ def main():
     print(f"\nWriting {len(all_rows)} backfill rows...")
     if all_rows:
         next_row = len(all_existing) + 1
+        needed_rows = next_row + len(all_rows)
+        if ws.row_count < needed_rows:
+            ws.add_rows(needed_rows - ws.row_count)
+            print(f"  Expanded sheet to {needed_rows} rows")
         updates = []
         for i, row_data in enumerate(all_rows):
             r = next_row + i
