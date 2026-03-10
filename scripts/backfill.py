@@ -36,13 +36,22 @@ def main():
     if not existing or existing[0] != "Username":
         ws.update(values=[DAILY_HEADERS], range_name="A1")
 
-    # Load existing rows to skip duplicates
+    # Load existing rows — skip only rows that have real activity data
     all_existing = ws.get_all_values()
     existing_keys = set()
-    for row in all_existing[1:]:
+    existing_row_map = {}  # (username, date) -> row number for updates
+    for i, row in enumerate(all_existing[1:], start=2):
         if len(row) >= 2:
-            existing_keys.add((row[0].lower(), row[1]))
-    print(f"  {len(existing_keys)} existing daily rows, will skip duplicates")
+            key = (row[0].lower(), row[1])
+            existing_row_map[key] = i
+            # Only skip if the row has non-zero activity
+            has_data = any(
+                float(row[c]) != 0 for c in range(2, min(len(row), 10))
+                if row[c].replace(".", "", 1).replace("-", "", 1).isdigit()
+            )
+            if has_data:
+                existing_keys.add(key)
+    print(f"  {len(existing_keys)} existing rows with activity, will skip those")
 
     # Fetch base repo data once (PRs, issues, comments, review comments)
     base_repo_data = fetch_base_repo_data(
@@ -175,14 +184,22 @@ def main():
     print(f"\nWriting {len(all_rows)} backfill rows...")
     if all_rows:
         next_row = len(all_existing) + 1
-        needed_rows = next_row + len(all_rows)
-        if ws.row_count < needed_rows:
-            ws.add_rows(needed_rows - ws.row_count)
-            print(f"  Expanded sheet to {needed_rows} rows")
+        new_row_count = 0
         updates = []
-        for i, row_data in enumerate(all_rows):
-            r = next_row + i
+        for row_data in all_rows:
+            key = (row_data[0].lower(), row_data[1])
+            if key in existing_row_map:
+                # Update existing zero row in place
+                r = existing_row_map[key]
+            else:
+                r = next_row
+                next_row += 1
+                new_row_count += 1
             updates.append({"range": f"A{r}:M{r}", "values": [row_data]})
+
+        if next_row - 1 > ws.row_count:
+            ws.add_rows(next_row - 1 - ws.row_count)
+            print(f"  Expanded sheet to {next_row - 1} rows")
 
         chunk_size = 200
         for i in range(0, len(updates), chunk_size):

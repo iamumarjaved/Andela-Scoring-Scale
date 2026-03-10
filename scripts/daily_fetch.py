@@ -45,6 +45,10 @@ def main():
         ws.update(values=[DAILY_HEADERS], range_name="A1")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # Re-process yesterday to catch activity that happened after yesterday's run
+    write_daily_metrics(gh, sheets, ws, learners, base_repos, yesterday)
     write_daily_metrics(gh, sheets, ws, learners, base_repos, today)
 
     sort_daily_raw_metrics(ws)
