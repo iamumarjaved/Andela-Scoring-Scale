@@ -822,7 +822,7 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config,
     summary_headers = [
         "Learner's Email", "GitHub Account",
         "Consistency (PR Active Days)", "Collaboration (PRs + Reviews)",
-        "Code Volume (Lines Added)", "Repo Contributions",
+        "Code Volume (Lines Added)",
         "Quality Signals (PR Merge Rate)", "Total Score",
     ]
 
@@ -830,11 +830,10 @@ def write_external_sheet(sheets, leaderboard_rows, raw_ws, config,
     for r in leaderboard_rows:
         uname_lower = r["username"].lower()
         email = email_map.get(uname_lower, "")
-        issues = total_issues.get(uname_lower, 0)
         summary_rows.append([
             email, r["username"],
             r["consistency"], r["collaboration"],
-            r["code_volume"], r["prs_opened"] + issues,
+            r["code_volume"],
             r["quality"], r["total_score"],
         ])
 
