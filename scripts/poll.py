@@ -76,14 +76,17 @@ def main():
 
         issue_comments = len([c for c in data["comments"] if c["user"]["login"].lower() == username.lower()])
 
+        has_activity = any([commit_count, prs_opened, prs_merged, issues_opened, issue_comments])
+        if not has_activity:
+            continue
+
         all_rows.append([
             username, today, commit_count, prs_opened, prs_merged,
             issues_opened, issue_comments, 0,
             "", "", "", "", now,
         ])
 
-        if commit_count > 0 or prs_opened > 0:
-            print(f"  {username}: {commit_count} commits, {prs_opened} PRs, {issues_opened} issues")
+        print(f"  {username}: {commit_count} commits, {prs_opened} PRs, {issues_opened} issues")
 
     if all_rows:
         existing_data = ws.get_all_values()
@@ -102,6 +105,9 @@ def main():
                 r = next_row
                 next_row += 1
             updates.append({"range": f"A{r}:M{r}", "values": [row_data]})
+
+        if next_row - 1 > ws.row_count:
+            ws.add_rows(next_row - 1 - ws.row_count)
 
         ws.batch_update(updates)
         print(f"  Wrote {len(updates)} rows")
