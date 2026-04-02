@@ -16,7 +16,7 @@ from tracker.constants import (
     EXTERNAL_GROUP_HEADERS,
     EXTERNAL_PERIOD_HEADERS,
 )
-from tracker.fetchers import fetch_base_repo_data, fetch_learner_day, fetch_learner_alltime
+from tracker.fetchers import fetch_base_repo_data, fetch_learner_day, fetch_learner_alltime, compute_period_metrics
 from tracker.scoring import compute_scores
 
 
@@ -110,12 +110,46 @@ def sort_daily_raw_metrics(ws):
     print(f"  Sorted {len(rows)} rows")
 
 
-def update_leaderboard(gh, sheets, learners, base_repos, config):
+def _build_leaderboard_row(username, m, scores):
+    """Build a leaderboard row dict from metrics and scores."""
+    mt = m["avg_merge_time"]
+    if mt == 0:
+        merge_time_str = "N/A"
+    elif mt < 1:
+        merge_time_str = f"{round(mt * 60)} min"
+    elif mt < 24:
+        merge_time_str = f"{round(mt, 1)} hrs"
+    else:
+        merge_time_str = f"{round(mt / 24, 1)} days"
+
+    return {
+        "username": username,
+        "classification": scores["classification"],
+        "total_score": scores["total_score"],
+        "consistency": scores["consistency"],
+        "collaboration": scores["collaboration"],
+        "code_volume": scores["code_volume"],
+        "quality": scores["quality"],
+        "active_days": m["active_days"],
+        "total_commits": m["total_commits"],
+        "prs_opened": m["prs_opened"],
+        "prs_merged": m["prs_merged"],
+        "lines_added": m["lines_added"],
+        "lines_deleted": m["lines_deleted"],
+        "comments_received": m.get("comments_received", 0),
+        "comments_given": m["comments_given"],
+        "avg_merge_time": merge_time_str,
+        "rejection_rate": f"{round(m['rejection_rate'] * 100)}%",
+        "last_active": m["last_active"],
+        "last_comment": m.get("last_comment", ""),
+    }
+
+
+def update_leaderboard(gh, sheets, learners, base_repos, config, periods=None):
     """Fetch all-time data, compute scores, and write to the Leaderboard tab.
 
-    For each learner, fetches all-time metrics (filtered by bootcamp start),
-    computes scores using config-driven weights, ranks by total score, and
-    writes the complete leaderboard with formatted merge times and rejection rates.
+    Also computes period leaderboards (weekly, monthly) from the same API data
+    — zero extra API calls.
 
     Args:
         gh: GitHubClient instance.
@@ -123,9 +157,12 @@ def update_leaderboard(gh, sheets, learners, base_repos, config):
         learners: List of learner dicts.
         base_repos: List of "owner/repo" strings.
         config: Config dict from the Config sheet.
+        periods: Optional dict mapping period name to (start_date, end_date).
+            E.g. {"weekly": ("2026-03-30", "2026-04-02"), "monthly": ("2026-04-01", "2026-04-02")}
 
     Returns:
-        List of leaderboard row dicts (used by write_alerts).
+        Tuple of (leaderboard_rows, period_results) where period_results is a
+        dict mapping period name to list of leaderboard row dicts.
     """
     print("\nUpdating Leaderboard...")
     bootcamp_start_str = config.get("bootcamp_start_date", "2026-02-23")
@@ -139,48 +176,30 @@ def update_leaderboard(gh, sheets, learners, base_repos, config):
         gh, base_repos, since=bootcamp_start_iso, include_review_comments=True
     )
 
+    if periods is None:
+        periods = {}
+
     leaderboard_rows = []
+    # Accumulate per-period rows: {period_name: [row_dicts]}
+    period_rows = {name: [] for name in periods}
+
     for learner in learners:
         username = learner["username"]
         print(f"  Fetching all-time data for {username}...")
         m = fetch_learner_alltime(gh, learner, base_repo_data, config=config)
         scores = compute_scores(m, config)
 
-        mt = m["avg_merge_time"]
-        if mt == 0:
-            merge_time_str = "N/A"
-        elif mt < 1:
-            merge_time_str = f"{round(mt * 60)} min"
-        elif mt < 24:
-            merge_time_str = f"{round(mt, 1)} hrs"
-        else:
-            merge_time_str = f"{round(mt / 24, 1)} days"
-
-        rejection_str = f"{round(m['rejection_rate'] * 100)}%"
-
-        leaderboard_rows.append({
-            "username": username,
-            "classification": scores["classification"],
-            "total_score": scores["total_score"],
-            "consistency": scores["consistency"],
-            "collaboration": scores["collaboration"],
-            "code_volume": scores["code_volume"],
-            "quality": scores["quality"],
-            "active_days": m["active_days"],
-            "total_commits": m["total_commits"],
-            "prs_opened": m["prs_opened"],
-            "prs_merged": m["prs_merged"],
-            "lines_added": m["lines_added"],
-            "lines_deleted": m["lines_deleted"],
-            "comments_received": m["comments_received"],
-            "comments_given": m["comments_given"],
-            "avg_merge_time": merge_time_str,
-            "rejection_rate": rejection_str,
-            "last_active": m["last_active"],
-            "last_comment": m.get("last_comment", ""),
-        })
-
+        leaderboard_rows.append(_build_leaderboard_row(username, m, scores))
         print(f"    {username}: score={scores['total_score']}, {scores['classification']}")
+
+        # Compute period metrics from the same raw data
+        for name, (p_start, p_end) in periods.items():
+            p_end_date = datetime.strptime(p_end, "%Y-%m-%d").date()
+            pm = compute_period_metrics(m, p_start, p_end)
+            period_config = dict(config)
+            period_config["bootcamp_start_date"] = p_start
+            p_scores = compute_scores(pm, period_config, end_date=p_end_date)
+            period_rows[name].append(_build_leaderboard_row(username, pm, p_scores))
 
     leaderboard_rows.sort(key=lambda r: r["total_score"], reverse=True)
 
@@ -199,7 +218,26 @@ def update_leaderboard(gh, sheets, learners, base_repos, config):
     sheets.clear_and_write(lb_ws, LEADERBOARD_HEADERS, sheet_rows)
     print(f"  Wrote {len(sheet_rows)} rows to Leaderboard")
 
-    return leaderboard_rows
+    # Write period leaderboards
+    for name, (p_start, p_end) in periods.items():
+        rows = period_rows[name]
+        rows.sort(key=lambda r: r["total_score"], reverse=True)
+        s_rows = []
+        for rank, r in enumerate(rows, start=1):
+            s_rows.append([
+                rank, r["username"], r["classification"], r["total_score"],
+                r["consistency"], r["collaboration"], r["code_volume"], r["quality"],
+                r["active_days"], r["total_commits"], r["prs_opened"], r["prs_merged"],
+                r["lines_added"], r["lines_deleted"], r["comments_received"],
+                r["comments_given"], r["avg_merge_time"], r["rejection_rate"],
+                r["last_active"], r["last_comment"],
+            ])
+        tab_name = name.replace("_", " ").title()
+        pw = sheets.get_worksheet(tab_name)
+        sheets.clear_and_write(pw, LEADERBOARD_HEADERS, s_rows)
+        print(f"  Wrote {len(s_rows)} rows to {tab_name}")
+
+    return leaderboard_rows, period_rows
 
 
 def write_period_leaderboard(sheets, raw_ws, config, tab_name, start_date, end_date, learners=None):

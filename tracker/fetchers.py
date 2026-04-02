@@ -216,11 +216,19 @@ def fetch_learner_alltime(gh, learner, base_repo_data, config=None):
 
     total_added = 0
     total_deleted = 0
+    pr_lines = {}
     for pr in user_prs:
         try:
             pr_detail = gh.get_pr_detail(base_owner, base_repo, pr["number"])
-            total_added += pr_detail.get("additions", 0)
-            total_deleted += pr_detail.get("deletions", 0)
+            additions = pr_detail.get("additions", 0)
+            deletions = pr_detail.get("deletions", 0)
+            total_added += additions
+            total_deleted += deletions
+            pr_lines[pr["number"]] = {
+                "date": pr["created_at"][:10],
+                "additions": additions,
+                "deletions": deletions,
+            }
         except Exception:
             pass
 
@@ -320,4 +328,91 @@ def fetch_learner_alltime(gh, learner, base_repo_data, config=None):
         "rejection_rate": rejection_rate,
         "last_active": last_active,
         "last_comment": last_comment_text,
+        # Raw date-tagged data for period filtering (no extra API calls)
+        "_commit_dates": [c["commit"]["author"]["date"][:10] for c in all_commits
+                          if c["commit"]["author"]["date"][:10] >= bootcamp_start_str],
+        "_user_prs": user_prs,
+        "_user_issues": user_issues,
+        "_comments_given_dates": (
+            [c["created_at"][:10] for c in all_issue_comments
+             if c["user"]["login"].lower() == username.lower()
+             and c["created_at"][:10] >= bootcamp_start_str]
+            + [c["created_at"][:10] for c in all_review_comments
+               if c["user"]["login"].lower() == username.lower()
+               and c["created_at"][:10] >= bootcamp_start_str]
+        ),
+        "_pr_lines": pr_lines,
+    }
+
+
+def compute_period_metrics(alltime_metrics, start_date, end_date):
+    """Filter all-time raw data to a date range and return period metrics.
+
+    Uses the _commit_dates, _user_prs, _user_issues, _comments_given_dates,
+    and _pr_lines fields from fetch_learner_alltime to compute period-specific
+    metrics without any extra API calls.
+
+    Args:
+        alltime_metrics: Dict returned by fetch_learner_alltime (with _ fields).
+        start_date: Start date string (YYYY-MM-DD), inclusive.
+        end_date: End date string (YYYY-MM-DD), inclusive.
+
+    Returns:
+        Dict of period metrics compatible with compute_scores.
+    """
+    commit_dates = [d for d in alltime_metrics.get("_commit_dates", [])
+                    if start_date <= d <= end_date]
+
+    user_prs = alltime_metrics.get("_user_prs", [])
+    period_prs = [p for p in user_prs if start_date <= p["created_at"][:10] <= end_date]
+    period_merged = [p for p in period_prs if p.get("merged_at")]
+
+    user_issues = alltime_metrics.get("_user_issues", [])
+    period_issues = [i for i in user_issues if start_date <= i["created_at"][:10] <= end_date]
+
+    comment_dates = [d for d in alltime_metrics.get("_comments_given_dates", [])
+                     if start_date <= d <= end_date]
+
+    pr_lines = alltime_metrics.get("_pr_lines", {})
+    lines_added = sum(v["additions"] for v in pr_lines.values()
+                      if start_date <= v["date"] <= end_date)
+    lines_deleted = sum(v["deletions"] for v in pr_lines.values()
+                        if start_date <= v["date"] <= end_date)
+
+    active_dates = set(commit_dates)
+    for p in period_prs:
+        active_dates.add(p["created_at"][:10])
+    for i in period_issues:
+        active_dates.add(i["created_at"][:10])
+    active_dates.update(comment_dates)
+
+    pr_active_dates = {p["created_at"][:10] for p in period_prs}
+
+    merge_times = []
+    for pr in period_merged:
+        created = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
+        merged = datetime.fromisoformat(pr["merged_at"].replace("Z", "+00:00"))
+        merge_times.append((merged - created).total_seconds() / 3600)
+    avg_merge_time = round(sum(merge_times) / len(merge_times), 1) if merge_times else 0
+
+    closed_prs = [p for p in period_prs if p["state"] == "closed"]
+    rejected = [p for p in closed_prs if not p.get("merged_at")]
+    rejection_rate = round(len(rejected) / len(closed_prs), 2) if closed_prs else 0
+
+    return {
+        "active_days": len(active_dates),
+        "pr_active_days": len(pr_active_dates),
+        "total_commits": len(commit_dates),
+        "weekly_commits": len(commit_dates),
+        "prs_opened": len(period_prs),
+        "prs_merged": len(period_merged),
+        "issues_opened": len(period_issues),
+        "comments_given": len(comment_dates),
+        "comments_received": 0,
+        "lines_added": lines_added,
+        "lines_deleted": lines_deleted,
+        "avg_merge_time": avg_merge_time,
+        "rejection_rate": rejection_rate,
+        "last_active": max(active_dates) if active_dates else "",
+        "last_comment": "",
     }
