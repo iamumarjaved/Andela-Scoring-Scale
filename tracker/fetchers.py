@@ -364,8 +364,14 @@ def compute_period_metrics(alltime_metrics, start_date, end_date):
                     if start_date <= d <= end_date]
 
     user_prs = alltime_metrics.get("_user_prs", [])
-    period_prs = [p for p in user_prs if start_date <= p["created_at"][:10] <= end_date]
-    period_merged = [p for p in period_prs if p.get("merged_at")]
+    # PRs created in the period
+    period_prs_created = [p for p in user_prs if start_date <= p["created_at"][:10] <= end_date]
+    # PRs merged in the period (even if created earlier — reflects ongoing work)
+    period_prs_merged = [p for p in user_prs
+                         if p.get("merged_at") and start_date <= p["merged_at"][:10] <= end_date]
+    # PRs active in the period: created OR merged during this window
+    period_pr_numbers = {p["number"] for p in period_prs_created} | {p["number"] for p in period_prs_merged}
+    period_prs = [p for p in user_prs if p["number"] in period_pr_numbers]
 
     user_issues = alltime_metrics.get("_user_issues", [])
     period_issues = [i for i in user_issues if start_date <= i["created_at"][:10] <= end_date]
@@ -373,39 +379,44 @@ def compute_period_metrics(alltime_metrics, start_date, end_date):
     comment_dates = [d for d in alltime_metrics.get("_comments_given_dates", [])
                      if start_date <= d <= end_date]
 
+    # Lines from PRs created OR merged during the period
     pr_lines = alltime_metrics.get("_pr_lines", {})
-    lines_added = sum(v["additions"] for v in pr_lines.values()
-                      if start_date <= v["date"] <= end_date)
-    lines_deleted = sum(v["deletions"] for v in pr_lines.values()
-                        if start_date <= v["date"] <= end_date)
+    lines_added = sum(v["additions"] for num, v in pr_lines.items() if num in period_pr_numbers)
+    lines_deleted = sum(v["deletions"] for num, v in pr_lines.items() if num in period_pr_numbers)
 
     active_dates = set(commit_dates)
-    for p in period_prs:
+    for p in period_prs_created:
         active_dates.add(p["created_at"][:10])
+    for p in period_prs_merged:
+        active_dates.add(p["merged_at"][:10])
     for i in period_issues:
         active_dates.add(i["created_at"][:10])
     active_dates.update(comment_dates)
 
-    pr_active_dates = {p["created_at"][:10] for p in period_prs}
+    pr_active_dates = set()
+    for p in period_prs_created:
+        pr_active_dates.add(p["created_at"][:10])
+    for p in period_prs_merged:
+        pr_active_dates.add(p["merged_at"][:10])
 
     merge_times = []
-    for pr in period_merged:
+    for pr in period_prs_merged:
         created = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
         merged = datetime.fromisoformat(pr["merged_at"].replace("Z", "+00:00"))
         merge_times.append((merged - created).total_seconds() / 3600)
     avg_merge_time = round(sum(merge_times) / len(merge_times), 1) if merge_times else 0
 
-    closed_prs = [p for p in period_prs if p["state"] == "closed"]
-    rejected = [p for p in closed_prs if not p.get("merged_at")]
-    rejection_rate = round(len(rejected) / len(closed_prs), 2) if closed_prs else 0
+    prs_opened = len(period_prs_created)
+    prs_merged = len(period_prs_merged)
+    rejection_rate = (1 - (prs_merged / prs_opened)) if prs_opened > 0 else 0
 
     return {
         "active_days": len(active_dates),
         "pr_active_days": len(pr_active_dates),
         "total_commits": len(commit_dates),
         "weekly_commits": len(commit_dates),
-        "prs_opened": len(period_prs),
-        "prs_merged": len(period_merged),
+        "prs_opened": prs_opened,
+        "prs_merged": prs_merged,
         "issues_opened": len(period_issues),
         "comments_given": len(comment_dates),
         "comments_received": 0,
